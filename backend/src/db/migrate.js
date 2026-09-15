@@ -4,13 +4,14 @@
 //   - already applied + different checksum → THROW (schema drift, fail loud)
 //   - not applied → apply + record (apply failure is never recorded)
 // New migration files are picked up automatically; explicit ordering only
-// where FKs demand it (9999 issues before 9998 directives).
+// where FKs demand it (9999 issues before 9998 directives; tenant RLS 9999b/c
+// AFTER every table exists — policies on missing tables fail fresh inits).
 import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 export function orderedMigrationFiles(files) {
-  const rank = (f) => (f === '9999_add_issues_table.sql' ? 1 : f === '9998_align_schema_with_routes.sql' ? 2 : 0);
+  const rank = (f) => (f === '9999_add_issues_table.sql' ? 1 : f === '9998_align_schema_with_routes.sql' ? 2 : f === '9999b_tenant_rls.sql' ? 3 : f === '9999c_fix_rls_hatch.sql' ? 4 : 0);
   return [...files].sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
 }
 

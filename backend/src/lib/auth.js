@@ -117,7 +117,11 @@ export async function requireAuth(req, res, next) {
     if (!user) return res.status(401).json({ error: 'Unauthorized. Đăng nhập để tiếp tục.' });
     req.user = user;
     attachSession(req, user);
-    next();
+    // Establish the tenant context for the rest of this request: every pooled
+    // query downstream SETs app.current_tenant (RLS) from here. The lookup above
+    // runs WITHOUT tenant on purpose (login-time user reload must not filter).
+    const { runWithTenant } = await import('./tenant.js');
+    runWithTenant(user.tenant_id, () => next());
   } catch (e) {
     return res.status(401).json({ error: 'Unauthorized.' });
   }

@@ -11,6 +11,7 @@ import { requireProjectAccess, requireResourceProject } from '../lib/project-acc
 import { getDb } from '../db/index.js';
 import { withAudit } from '../lib/with-audit.js';
 import { checkTransition } from '../lib/transitions.js';
+import { requireFeature } from '../lib/entitlements.js';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -132,15 +133,15 @@ router.get('/projects/:id/payment-requests', async (req, res) => {
   ).allAsync(...params));
 });
 
-// ---- AR (phải thu từ CĐT): read-only views over ar_contracts/ar_lines ----
-router.get('/projects/:id/ar-contracts', async (req, res) => {
+// ---- AR (phải thu từ CĐT): Mid=read, Enterprise=full. Small gets 403. ----
+router.get('/projects/:id/ar-contracts', requireFeature('ar-read'), async (req, res) => {
   const db = getDb();
   res.json(await db.prepare(
     'SELECT * FROM ar_contracts WHERE project_id = ? ORDER BY ordinal NULLS LAST, id'
   ).allAsync(req.params.id));
 });
 
-router.get('/projects/:id/ar-lines', async (req, res) => {
+router.get('/projects/:id/ar-lines', requireFeature('ar-read'), async (req, res) => {
   const db = getDb();
   const { sheet } = req.query;
   const where = ['project_id = $1'];

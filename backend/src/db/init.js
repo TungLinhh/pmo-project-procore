@@ -129,25 +129,13 @@ for (const d of departments) {
     console.log(`✓ Created department ${d.code}`);
   }
 }
-// HBG-only access seam: every user is a member of every project in their
-// tenant. Idempotent. (Multi-tenant later = manage project_members explicitly
-// instead of this backfill.)
-const allUsers = await db.prepare('SELECT id, tenant_id FROM users').allAsync();
-const allProjects = await db.prepare('SELECT id, tenant_id FROM projects').allAsync();
-let memberAdds = 0;
-for (const u of allUsers) {
-  for (const p of allProjects) {
-    if (u.tenant_id !== p.tenant_id) continue;
-    const has = await db.prepare('SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?').getAsync(p.id, u.id);
-    if (!has) {
-      // explicit RETURNING: the db wrapper auto-appends RETURNING id, but this
-      // table's PK is (project_id, user_id) with no id column.
-      await db.prepare('INSERT INTO project_members (project_id, user_id) VALUES (?, ?) RETURNING project_id').runAsync(p.id, u.id);
-      memberAdds++;
-    }
-  }
-}
-if (memberAdds) console.log(`✓ Backfilled ${memberAdds} project memberships`);
+// Explicit membership (Phase A, 2026-09-15): the old HBG-only backfill that made
+// every user a member of every project in their tenant is GONE. Existing
+// project_members rows are kept as seed data; new users/projects get membership
+// only via POST /api/projects/:id/members (admin/CEO/PM) or the auto-member on
+// project creation (wizard POST /api/projects). Least-privilege by default —
+// the pilot-tenant guard test proves a fresh user sees nothing until added.
+console.log('✓ Memberships are explicit (no auto backfill; existing rows kept)');
 
 // One-time sequence resync (replaces the old per-INSERT setval magic):
 // external imports with explicit ids can leave <table>_id_seq behind MAX(id).

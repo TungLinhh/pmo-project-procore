@@ -4,24 +4,28 @@ import { Router } from 'express';
 import { requireAuth } from '../lib/auth.js';
 import { permissionMiddleware } from '../lib/permission-middleware.js';
 import { getDb } from '../db/index.js';
+import { requireFeature, requireAnyFeature } from '../lib/entitlements.js';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 router.use(permissionMiddleware);
 
 // GET /api/dashboard — tổng hợp nhanh (portrait toàn tenant)
+// Every count is tenant-scoped (joins projects where the table has no
+// tenant_id). Unscoped counts leaked cross-tenant rows — fixed Phase A.
 router.get('/', async (req, res) => {
   const db = getDb();
   const tenantId = req.user.tenant_id || 1;
+  const inTenantProjects = `project_id IN (SELECT id FROM projects WHERE tenant_id = $1)`;
   const [projects, kpiActive, materialsPending, submittalsOverdue, sdPending, manpowerToday, issuesOpen, highIssues] = await Promise.all([
     db.prepare("SELECT COUNT(*) as c FROM projects WHERE tenant_id = $1 AND status = 'ACTIVE'").getAsync(tenantId),
-    db.prepare("SELECT COUNT(*) as c FROM kpi_targets WHERE effective_to IS NULL").getAsync(),
-    db.prepare("SELECT COUNT(*) as c FROM material_submittals WHERE status NOT IN ('APPROVED', 'CLOSED')").getAsync(),
-    db.prepare("SELECT COUNT(*) as c FROM material_submittals WHERE status NOT IN ('APPROVED', 'CLOSED') AND (sla_deadline < CURRENT_DATE OR supervisor_deadline < CURRENT_DATE)").getAsync(),
-    db.prepare("SELECT COUNT(*) as c FROM shop_drawings WHERE status IN ('SUBMITTED', 'DRAFT')").getAsync(),
-    db.prepare("SELECT COALESCE(SUM(dm.headcount), 0) as c FROM daily_manpower dm JOIN daily_reports dr ON dr.id = dm.daily_report_id WHERE dr.report_date = CURRENT_DATE").getAsync(),
-    db.prepare("SELECT COUNT(*) as c FROM issues WHERE status NOT IN ('CLOSED', 'RESOLVED')").getAsync(),
-    db.prepare("SELECT COUNT(*) as c FROM issues WHERE severity = 'HIGH' AND status NOT IN ('CLOSED', 'RESOLVED')").getAsync(),
+    db.prepare(`SELECT COUNT(*) as c FROM kpi_targets WHERE ${inTenantProjects} AND effective_to IS NULL`).getAsync(tenantId),
+    db.prepare(`SELECT COUNT(*) as c FROM material_submittals WHERE ${inTenantProjects} AND status NOT IN ('APPROVED', 'CLOSED')`).getAsync(tenantId),
+    db.prepare(`SELECT COUNT(*) as c FROM material_submittals WHERE ${inTenantProjects} AND status NOT IN ('APPROVED', 'CLOSED') AND (sla_deadline < CURRENT_DATE OR supervisor_deadline < CURRENT_DATE)`).getAsync(tenantId),
+    db.prepare(`SELECT COUNT(*) as c FROM shop_drawings WHERE ${inTenantProjects} AND status IN ('SUBMITTED', 'DRAFT')`).getAsync(tenantId),
+    db.prepare(`SELECT COALESCE(SUM(dm.headcount), 0) as c FROM daily_manpower dm JOIN daily_reports dr ON dr.id = dm.daily_report_id JOIN projects p ON p.id = dr.project_id WHERE p.tenant_id = $1 AND dr.report_date = CURRENT_DATE`).getAsync(tenantId),
+    db.prepare('SELECT COUNT(*) as c FROM issues WHERE tenant_id = $1 AND status NOT IN (\'CLOSED\', \'RESOLVED\')').getAsync(tenantId),
+    db.prepare('SELECT COUNT(*) as c FROM issues WHERE tenant_id = $1 AND severity = \'HIGH\' AND status NOT IN (\'CLOSED\', \'RESOLVED\')').getAsync(tenantId),
   ]);
   res.json({
     tenant_id: tenantId,
@@ -37,7 +41,7 @@ router.get('/', async (req, res) => {
   });
 });
 
-router.get('/portfolio-kpi', async (req, res) => {
+router.get('/portfolio-kpi', requireAnyFeature('portfolio-read', 'portfolio'), async (req, res) => {
   const db = getDb();
   const projs = await db.prepare("SELECT * FROM projects WHERE tenant_id = ? AND status = 'ACTIVE' ORDER BY id").allAsync(req.user.tenant_id);
   const out = [];

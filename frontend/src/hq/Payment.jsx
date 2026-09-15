@@ -27,6 +27,9 @@ export default function Payment() {
   const [arSheet, setArSheet] = useState('');
   const [loading, setLoading] = useState(false);
   const [hovered, setHovered] = useState(null);
+  // AR (receivables) is Mid(read)/Enterprise(full) only — Small (AP-only) gets
+  // 403 from the API; skip the fetch and hide the section (hide, not delete).
+  const [canAR, setCanAR] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [addForm, setAddForm] = useState({ contract_id: '', invoice_id: '', request_no: '', amount: '', retention_amount: 0, due_date: '' });
   const [addBusy, setAddBusy] = useState(false);
@@ -61,13 +64,22 @@ export default function Payment() {
         }
         setInvoices(invs);
         setPaymentRequests(prs);
-        // AR (phải thu từ CĐT) — separate tables, never mixed with AP chain
-        const [arcs, lines] = await Promise.all([
-          fetch(`/api/projects/${selectedProject}/ar-contracts`, { headers: { Authorization: `Bearer ${getToken()}` } }).then(r => r.json()).catch(() => []),
-          fetch(`/api/projects/${selectedProject}/ar-lines`, { headers: { Authorization: `Bearer ${getToken()}` } }).then(r => r.json()).catch(() => []),
-        ]);
-        setArContracts(Array.isArray(arcs) ? arcs : []);
-        setArLines(Array.isArray(lines) ? lines : []);
+        // AR (phải thu từ CĐT) — separate tables, never mixed with AP chain.
+        // Gated by plan: Small has no ar-read/ar-full → API 403s, skip early.
+        const ent = await fetch('/api/me/entitlements', { headers: authH }).then(r => r.json()).catch(() => null);
+        const okAR = Array.isArray(ent?.features) && (ent.features.includes('ar-read') || ent.features.includes('ar-full'));
+        setCanAR(okAR);
+        if (okAR) {
+          const [arcs, lines] = await Promise.all([
+            fetch(`/api/projects/${selectedProject}/ar-contracts`, { headers: { Authorization: `Bearer ${getToken()}` } }).then(r => r.json()).catch(() => []),
+            fetch(`/api/projects/${selectedProject}/ar-lines`, { headers: { Authorization: `Bearer ${getToken()}` } }).then(r => r.json()).catch(() => []),
+          ]);
+          setArContracts(Array.isArray(arcs) ? arcs : []);
+          setArLines(Array.isArray(lines) ? lines : []);
+        } else {
+          setArContracts([]);
+          setArLines([]);
+        }
         setArSheet('');
         setLoading(false);
       } catch (e) {
@@ -175,8 +187,8 @@ export default function Payment() {
         </div>
       </div>
 
-      {/* AR — phải thu từ CĐT (ingest file A_B as payment_ar) */}
-      {!loading && (arContracts.length > 0 || arLines.length > 0) && (
+      {/* AR — phải thu từ CĐT (Mid/Enterprise only; Small AP-only hides it) */}
+      {!loading && canAR && (arContracts.length > 0 || arLines.length > 0) && (
         <div className="section">
           <div className="section-title">
             <span>🧾 Phải thu từ CĐT (AR)</span>

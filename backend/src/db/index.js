@@ -23,6 +23,7 @@ import pg from 'pg';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
+import { applyTenantGuc, resetTenantGuc } from '../lib/tenant.js';
 
 const { Pool } = pg;
 
@@ -81,9 +82,22 @@ class PgStatement {
     this._isInsert = sql.trim().toUpperCase().startsWith('INSERT');
     this._needsReturningId = this._isInsert && !/RETURNING/i.test(sql);
   }
-  async runAsync(...args) {
+  // Every checkout applies the request tenant GUC (RLS, see lib/tenant.js) and
+  // RESETs it on release — pooled connections must never leak a tenant.
+  // No tenant in context (migrations/seeds/login) → no SET → hatch allows.
+  async _withTenantClient(fn) {
     const c = await getPool().connect();
+    let applied = false;
     try {
+      applied = await applyTenantGuc(c);
+      return await fn(c);
+    } finally {
+      if (applied) await resetTenantGuc(c);
+      c.release();
+    }
+  }
+  async runAsync(...args) {
+    return this._withTenantClient(async (c) => {
       let sql = this.sql;
       // Tables without an `id` column (composite PKs) can't RETURNING id —
       // probe once per table per process instead of regex/SQL hacks at callsites.
@@ -91,25 +105,23 @@ class PgStatement {
       const r = await c.query(sql, args);
       const lastInsertRowid = r.rows[0]?.id !== undefined ? Number(r.rows[0].id) : undefined;
       return { lastInsertRowid, changes: r.rowCount };
-    } finally { c.release(); }
+    });
   }
   async getAsync(...args) {
-    const c = await getPool().connect();
-    try {
+    return this._withTenantClient(async (c) => {
       // Skip LIMIT 1 if SQL already has LIMIT or RETURNING
       const sql = (/\bLIMIT\b/i.test(this.sql) || /\bRETURNING\b/i.test(this.sql))
         ? this.sql
         : this.sql + ' LIMIT 1';
       const r = await c.query(sql, args);
       return r.rows[0] || undefined;
-    } finally { c.release(); }
+    });
   }
   async allAsync(...args) {
-    const c = await getPool().connect();
-    try {
+    return this._withTenantClient(async (c) => {
       const r = await c.query(this.sql, args);
       return r.rows;
-    } finally { c.release(); }
+    });
   }
   // Sync API throws — PG requires async
   run() { throw new Error('PG requires async: use await runAsync()'); }
@@ -191,7 +203,9 @@ DbWrapper.prototype.upsert = async function(table, opts, row) {
   const sql = `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${placeholders})
                ON CONFLICT (${conflictCols.join(', ')}) ${conflictAction}`;
   const c = await getPool().connect();
+  let appliedGuc = false;
   try {
+    appliedGuc = await applyTenantGuc(c);
     const r = await c.query(sql, values);
     // EXCLUDED.* with no UPDATE returns no row, so fallback to manual lookup for lastInsertRowid
     if (setCols.length > 0 && r.rows[0]?.id) {
@@ -202,5 +216,8 @@ DbWrapper.prototype.upsert = async function(table, opts, row) {
     const whereArgs = conflictCols.map(c => row[c]);
     const r2 = await c.query(whereSql, whereArgs);
     return { lastInsertRowid: r2.rows[0]?.id ? Number(r2.rows[0].id) : undefined, changes: r.rowCount };
-  } finally { c.release(); }
+  } finally {
+    if (appliedGuc) { try { await c.query('RESET app.current_tenant'); } catch {} }
+    c.release();
+  }
 };

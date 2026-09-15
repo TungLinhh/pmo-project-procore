@@ -19,6 +19,7 @@ import { stageFile } from '../lib/stage.js';
 import { UPLOAD_STATUS } from '../lib/upload-status.js';
 import { detectDocType } from '../lib/excel.js';
 import { listZipEntries, extractZipEntry } from '../lib/zipread.js';
+import { requireFeature } from '../lib/entitlements.js';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -54,7 +55,7 @@ export function unsafeZipPath(name) {
   return null;
 }
 
-router.post('/batch', upload.single('file'), async (req, res) => {
+router.post('/batch', requireFeature('bulk-import'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file (field: file)' });
   if (!/\.zip$/i.test(req.file.originalname)) return res.status(400).json({ error: 'Batch intake accepts .zip only' });
   const db = getDb();

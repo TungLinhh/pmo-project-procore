@@ -3,15 +3,18 @@
 // - Approve/Reject đều có confirm trước khi gọi API
 // - View Details = inline expand ngay dưới dòng được chọn
 import { useEffect, useState } from 'react';
-import { projects, shopApi, materials, getToken } from '../api/index.js';
+import { projects, shopApi, materials, getToken, preferDemoProject } from '../api/index.js';
 import { toast } from '../components/Toast.jsx';
 import { ICON } from '../icons.jsx';
 import { useConfirm } from '../components/Confirm.jsx';
+import ProjectPicker from '../components/ProjectPicker.jsx';
 
 export default function Approval() {
   const [shopItems, setShopItems] = useState([]);
   const [submittalItems, setSubmittalItems] = useState([]);
   const [paymentItems, setPaymentItems] = useState([]);
+  const [allProjects, setAllProjects] = useState([]);
+  const [selectedProject, setSelectedProject] = useState(null);
   const [loading, setLoading] = useState(true);
   const [rejectModal, setRejectModal] = useState(null); // { type, id, label, reason, onSubmit }
   const [rejectReason, setRejectReason] = useState('');
@@ -21,18 +24,20 @@ export default function Approval() {
   const [detailLoading, setDetailLoading] = useState(false);
   const confirm = useConfirm();
 
-  async function load() {
+  async function load(projectId) {
+    const pid = projectId ?? selectedProject;
+    if (!pid) return;
     setLoading(true);
     try {
       // Shop drawings awaiting approval (SUBMITTED = sent for approval in this workflow)
-      const shopResp = await fetch('/api/shop-drawings?project_id=1&status=SUBMITTED&limit=20', {
+      const shopResp = await fetch(`/api/shop-drawings?project_id=${pid}&status=SUBMITTED&limit=20`, {
         headers: { Authorization: `Bearer ${getToken()}` }
       }).then(r => r.json()).catch(() => []);
       setShopItems(Array.isArray(shopResp) ? shopResp : []);
 
       // Material submittals
-      const subResp = await materials.overdue(1).catch(() => []);
-      const subAll = await fetch('/api/material-submittals?project_id=1&status=SUBMITTED&limit=20', {
+      const subResp = await materials.overdue(pid).catch(() => []);
+      const subAll = await fetch(`/api/material-submittals?project_id=${pid}&status=SUBMITTED&limit=20`, {
         headers: { Authorization: `Bearer ${getToken()}` }
       }).then(r => r.json()).catch(() => []);
       const allSub = [...(Array.isArray(subResp) ? subResp : []), ...(Array.isArray(subAll) ? subAll : [])];
@@ -40,7 +45,7 @@ export default function Approval() {
       setSubmittalItems(allSub.filter(x => { if (seen.has(x.id)) return false; seen.add(x.id); return true; }));
 
       // Payment requests PENDING
-      const payResp = await fetch('/api/projects/1/payment-requests?status=PENDING&limit=20', {
+      const payResp = await fetch(`/api/projects/${pid}/payment-requests?status=PENDING&limit=20`, {
         headers: { Authorization: `Bearer ${getToken()}` }
       }).then(r => r.json()).catch(() => []);
       setPaymentItems(Array.isArray(payResp) ? payResp : []);
@@ -50,7 +55,13 @@ export default function Approval() {
       setLoading(false);
     }
   }
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    projects.list().then(list => {
+      setAllProjects(list);
+      setSelectedProject(preferDemoProject(list));
+    }).catch(() => setLoading(false));
+  }, []);
+  useEffect(() => { if (selectedProject) load(selectedProject); }, [selectedProject]);
 
   // ===== Approve handlers - dùng chung confirmApprove =====
   // Shop approve is chain-aware: with a multi-level chain, approve the
@@ -278,7 +289,10 @@ export default function Approval() {
           <h1>Approval Center</h1>
           <div className="meta">{totalPending} items chờ duyệt {loading ? '(đang tải...)' : ''}</div>
         </div>
-        <button className="btn btn-secondary" onClick={load} disabled={loading}><ICON.refresh size={12} />Refresh</button>
+        <div className="page-header-right">
+          <ProjectPicker value={selectedProject} onChange={setSelectedProject} placeholder="Chọn dự án..." />
+          <button className="btn btn-secondary" onClick={() => load()} disabled={loading}><ICON.refresh size={12} />Refresh</button>
+        </div>
       </div>
 
       <div className="stat-strip">

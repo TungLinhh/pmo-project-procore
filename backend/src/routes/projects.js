@@ -59,6 +59,70 @@ router.patch('/:id', requireRole('admin', 'ceo'), async (req, res) => {
   }
 });
 
+// Explicit membership (Phase A): who works on this project. Least-privilege —
+// no auto-grant. Admin/CEO always pass via requireProjectAccess bypass; PM can
+// manage members of projects they belong to.
+router.get('/:id/members', async (req, res) => {
+  const db = getDb();
+  res.json(await db.prepare(
+    `SELECT u.id, u.email, u.name, u.role, u.is_ceo, pm.created_at AS member_since
+     FROM project_members pm JOIN users u ON u.id = pm.user_id
+     WHERE pm.project_id = ? ORDER BY u.id`
+  ).allAsync(req.params.id));
+});
+
+router.post('/:id/members', requireRole('admin', 'ceo', 'pm'), async (req, res) => {
+  const db = getDb();
+  const { user_id } = req.body || {};
+  if (!Number.isInteger(user_id)) return res.status(400).json({ error: 'user_id must be integer' });
+  const target = await db.prepare('SELECT id, tenant_id FROM users WHERE id = ?').getAsync(user_id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (target.tenant_id !== req.user.tenant_id) {
+    return res.status(404).json({ error: 'User not found' }); // same code, no leak
+  }
+  const old = await db.prepare('SELECT * FROM project_members WHERE project_id = ? AND user_id = ?').getAsync(req.params.id, user_id);
+  try {
+    const result = await withAudit(req, {
+      action: 'ADD_MEMBER', resourceType: 'project_member', resourceId: Number(req.params.id),
+      context: { project_id: Number(req.params.id), user_id },
+      before: old || null,
+      after: { project_id: Number(req.params.id), user_id },
+      note: `Thêm member ${user_id} vào project ${req.params.id}`,
+    }, async (client) => {
+      // explicit RETURNING: composite PK table has no id column.
+      const r = await client.query(
+        'INSERT INTO project_members (project_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING project_id',
+        [req.params.id, user_id]
+      );
+      return { added: r.rowCount > 0 };
+    });
+    res.status(201).json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/:id/members/:userId', requireRole('admin', 'ceo', 'pm'), async (req, res) => {
+  const db = getDb();
+  const old = await db.prepare('SELECT * FROM project_members WHERE project_id = ? AND user_id = ?').getAsync(req.params.id, req.params.userId);
+  if (!old) return res.status(404).json({ error: 'Not a member' });
+  try {
+    await withAudit(req, {
+      action: 'REMOVE_MEMBER', resourceType: 'project_member', resourceId: Number(req.params.id),
+      context: { project_id: Number(req.params.id), user_id: Number(req.params.userId) },
+      before: old,
+      after: null,
+      note: `Xóa member ${req.params.userId} khỏi project ${req.params.id}`,
+    }, async (client) => {
+      await client.query('DELETE FROM project_members WHERE project_id = $1 AND user_id = $2', [req.params.id, req.params.userId]);
+      return { ok: true };
+    });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.post('/:id/close', requireRole('ceo', 'admin'), async (req, res) => {
   const db = getDb();
   const { reason } = req.body || {};

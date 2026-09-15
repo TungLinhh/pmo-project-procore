@@ -6,6 +6,7 @@ import { requireAuth, requireRole } from '../lib/auth.js';
 import { getDb } from '../db/index.js';
 import { withAudit } from '../lib/with-audit.js';
 import { validateLevels, CHAINABLE_RESOURCES } from '../lib/approval.js';
+import { requireFeature } from '../lib/entitlements.js';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -24,7 +25,7 @@ router.get('/', async (req, res) => {
   ).allAsync(...params));
 });
 
-router.post('/', requireRole('admin', 'ceo'), async (req, res) => {
+router.post('/', requireRole('admin', 'ceo'), requireFeature('chains'), async (req, res) => {
   const db = getDb();
   const { department_id = null, resource_type, levels } = req.body || {};
   if (!CHAINABLE_RESOURCES.includes(resource_type)) {
@@ -68,7 +69,7 @@ router.post('/', requireRole('admin', 'ceo'), async (req, res) => {
   }
 });
 
-router.delete('/:id', requireRole('admin', 'ceo'), async (req, res) => {
+router.delete('/:id', requireRole('admin', 'ceo'), requireFeature('chains'), async (req, res) => {
   const db = getDb();
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'id must be integer' });

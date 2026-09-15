@@ -1,6 +1,6 @@
 # PMO MVP — Product Technical Documentation
 
-> **Version**: 0.4.0 · **Last updated**: 2026-09-12 · **Audience**: Engineers, technical PMs, integrators
+> **Version**: 0.5.0 · **Last updated**: 2026-09-15 · **Audience**: Engineers, technical PMs, integrators
 >
 > This document is the **single source of truth** for the PMO MVP. It replaces the previous collection of scattered docs (ARCHITECTURE, CODEBASE, USER_GUIDE, OPERATIONS, etc.). UML diagrams referenced from `docs/srs/`.
 
@@ -53,10 +53,9 @@ PMO MVP is a **construction project management system** built for a multi-zone c
 | **Procurement** | Material submittals, contracts, vendor management | Materials, Material Submittal, Master Data |
 | **Accounting** | Payment chain (contract → invoice → request → payment) | Payment, Contracts, Invoices |
 
-### 1.3 Out of scope (v0.4.0)
+### 1.3 Out of scope (v0.5.0)
 
 - Native mobile apps (web-responsive only)
-- Full multi-tenant (HBG-only seam: `tenant_id` from user, membership backfilled)
 - S3 storage (interface + hardened local driver; S3 stub fails loud)
 - Nested departments (flat list; `parent_id` deferred)
 - Offline enqueue endpoint (CLIENT apply works on seeded rows; field app posts online)
@@ -271,6 +270,10 @@ Located in `backend/drizzle/`, applied **exactly once** via the `schema_migratio
 | `0001_departments_chains.sql` | `departments`, `approval_chains`, `projects/users.department_id` |
 | `0002_sync_notes.sql` | `daily_reports.notes`, `shop_drawings.notes` (offline apply) |
 | `0003_file_uploads_zone.sql` | `file_uploads.zone_id` (was dev-only, broke fresh DBs) |
+| `0004_heal_schema_drift.sql` | `projects` close columns + `directives` heal (IF NOT EXISTS, converges dev/fresh) |
+| `0005_tenant_plans.sql` | `tenants.plan` (small/mid/enterprise) + `feature_flags` + `status`; HBG → enterprise |
+| `9999b_tenant_rls.sql` | RLS `*_tenant_isolation` policies on all tenant/project-scoped tables (runs after every table exists) |
+| `9999c_fix_rls_hatch.sql` | `app_tenant_unset()` / `app_current_tenant()` helpers; recreates all RLS policies coalesce-safe (generated, do not hand-edit) |
 | `9991_project_members.sql` | Membership seam (HBG-only backfill) |
 | `9992_auth_session.sql` | Refresh tokens + denylist |
 | `9993_auth_password.sql` | `password_hash` (bcrypt) |
@@ -283,9 +286,28 @@ Located in `backend/drizzle/`, applied **exactly once** via the `schema_migratio
 
 Sequences are resynced once at boot (`init.js`); inserts are single round-trip (no per-INSERT `setval`).
 
-### 3.4 Multi-tenant readiness
+### 3.4 Multi-tenant (v0.5.0: enforced, not a seam)
 
-HBG-only seam: `tenant_id` always comes from `req.user` (never hardcoded), `project_members` backfilled per tenant, cross-tenant reads/writes answer 404 (no leak). Full multi-tenant = manage memberships explicitly instead of the backfill.
+- **Plans**: `tenants.plan` ∈ small/mid/enterprise + `feature_flags` JSONB overrides
+  (`{"+bulk-import": true}`). Entitlements resolved in `lib/entitlements.js`;
+  `GET /api/me/entitlements` feeds frontend nav gating. Small = 4 pillars lean
+  (P1 basic, P2 single-step, P3 basic, P4 AP-only, no AR); Mid adds SLA/TVGS
+  filters, directives, OTD trend, AR-read, portfolio-read; Enterprise adds
+  chains write, portfolio full, audit-export, bulk-import, kpi-targets, AR-full.
+- **Isolation, two layers**: (1) app-level — `tenant_id` from `req.user`
+  (never hardcoded), `project-access.js` 404s cross-tenant; (2) Postgres RLS —
+  `*_tenant_isolation` policies on every tenant- or project-scoped table
+  (second-hop via joins), `FORCE` so the owner role is filtered too.
+- **GUC plumbing**: `requireAuth` opens an AsyncLocalStorage tenant context
+  (`lib/tenant.js`); `db/index.js` SETs `app.current_tenant` per checkout and
+  RESETs on release; `tx()` uses `SET LOCAL`. No-GUC sessions (migrations,
+  seeds, login lookup) pass via the `app_tenant_unset()` hatch.
+- **Membership is explicit**: the all-to-all backfill is removed; creators are
+  auto-members; `POST/DELETE /api/projects/:id/members` (admin/CEO/PM of that
+  project). `project_members` RLS requires both sides in the same tenant.
+- **Pilot tenant**: `PILOT` (plan small) provisioned via
+  `backend/scripts/provision-tenant.mjs`; HBG (enterprise) is the frozen
+  template. Guard: `tests/e2e/cross-tenant-guard.mjs` (30 checks).
 
 ---
 
@@ -323,6 +345,13 @@ app.get('*', (req, res) => res.sendFile(join(__dirname, '..', '..', 'frontend', 
 #### `lib/tx.js` + `lib/with-audit.js` — one pool, atomic audit
 - **Single shared `pg` Pool** (`db/index.js`; `PG_POOL_MAX`, idle/connection timeouts, idle-client error handler). `tx(fn)` = BEGIN/COMMIT/ROLLBACK.
 - `withAudit(req, meta, fn)` (alias `txAudit`): business + `audit_log` in one tx. `defer: true` lets the business result fill `before/after` (used by sync CLIENT apply).
+
+#### `lib/tenant.js` + `lib/entitlements.js` — tenancy + plans (v0.5.0)
+- `tenant.js`: AsyncLocalStorage tenant context (`runWithTenant`), `SET`/`RESET`
+  of the `app.current_tenant` RLS GUC per pooled checkout, `SET LOCAL` in `tx()`.
+- `entitlements.js`: `PLAN_FEATURES` (small/mid/enterprise over the 4 pillars),
+  `getEntitlements(tenantId)`, `requireFeature(flag)` / `requireAnyFeature(...)`
+  (plan gates answer **403**, distinct from tenant **404**s).
 
 #### `lib/transitions.js` — the only state machine
 `TRANSITIONS` per resource (`shop_drawing`, `payment_request`, `material_submittal`, `project`, `sync_item`); `checkTransition()` → routes answer 422 on illegal jumps.
@@ -369,8 +398,8 @@ const result = await db.upsert('projects', {
 | File | Mount | Endpoints | Purpose |
 |------|-------|-----------|---------|
 | `auth.js` | `/api/auth` | `POST /login`, `POST /refresh`, `POST /logout`, `POST /logout-all` | JWT login (bcrypt), rotate refresh, logout, logout-all |
-| `me.js` | `/api/me` | `GET /`, `GET /permissions`, `GET /notification-prefs`, `PUT /notification-prefs` | Self-service: whoami, my permissions, notification preferences |
-| `projects.js` | `/api/projects` | 14 endpoints | List, close/revoke, zones, materials, contracts, payments, daily-reports, issues, construction-schedule, shop-drawings, material-breakdown, submittals (overdue/pending-supervisor), schedule-baselines |
+| `me.js` | `/api/me` | `GET /`, `GET /permissions`, `GET /entitlements`, `GET /notification-prefs`, `PUT /notification-prefs` | Self-service: whoami (+plan), my permissions, plan flags, notification preferences |
+| `projects.js` | `/api/projects` | 17 endpoints | List, close/revoke, members add/remove/list, zones, materials, contracts, payments, daily-reports, issues, construction-schedule, shop-drawings, material-breakdown, submittals (overdue/pending-supervisor), schedule-baselines |
 | `kpi.js` | `/api/kpis` | `GET /`, `POST /`, `GET /:kpi_code/history` | KPI current values + history |
 | `kpi-targets.js` | `/api/projects/:id/kpi-targets` | `PUT /:id` | Update target (auto-creates history row) |
 | `issues.js` | `/api/issues` | `GET /`, `GET /:id`, `POST /` | Issue list, detail, create |
@@ -394,6 +423,12 @@ const result = await db.upsert('projects', {
 | `admin.js` | `/api/admin` | `GET /users`, `PATCH /users/:id` | User list (no hash) + department assign — admin/CEO |
 
 **Note**: Many routes use `Router({ mergeParams: true })` because they're mounted under `/api/projects/:id/...` and need `req.params.id` to be visible inside the sub-router. **This is the #1 source of "missing param" bugs** — never forget it.
+
+**Fail-closed permissions (v0.5.0)**: `permission-middleware.js` maps every
+`/api/*` route to a matrix module; unmatched authenticated requests get **403**
+(not silent allow). Plan gates run after it: AR → `ar-read`, chains write →
+`chains`, bulk zip → `bulk-import`, audit export → `audit-export`,
+portfolio-kpi → `portfolio-read|portfolio`.
 
 ### 4.5 Services
 
@@ -1081,6 +1116,7 @@ PGPASSWORD=pmo_dev_pwd psql -h 127.0.0.1 -p 5433 -U pmo_user -d pmo
 | Suite | What it guards |
 |-------|----------------|
 | `pipeline-guard.mjs` | **Full pipeline on scratch DB**: synth workbooks → upload→configure→commit → pillars/OTD → approve→pay → CLIENT sync → DROP. CI-safe. |
+| `cross-tenant-guard.mjs` | **Tenancy proof (v0.5.0)**: mutual 404s, plan entitlements + 403 gates, RLS at DB layer, pool-clean check, members round-trip. Needs PILOT tenant. |
 | `demo-walkthrough.mjs` | 28 checks of the demo flow on real data |
 | `p5-golden.mjs` | Demo-data goldens (77 contracts, 248 PRs, AR sums, project set, empty bell) |
 | `p5-money.mjs` | Every amount is `number`; JS sum = SQL SUM; no NaN |
@@ -1271,13 +1307,14 @@ docker compose restart backend
 | 2026-09-05 | Docs v0.3.0 | Unified Product Technical Documentation | (this commit) |
 | 2026-09-11 | P3–P5 + Wave 2 | Pool/ledger/sequences/txAudit/transitions; departments + chains; storage/sync-apply/money-proof; cleanup | (this commit) |
 | 2026-09-12 | Docs v0.4.0 | README (VI), PTD v0.4.0, SRS refresh, pipeline-guard, LAWRENCE removal | (this commit) |
+| 2026-09-15 | Multi-tenant v0.5.0 | Tenant plans (Small/Mid/Enterprise) + entitlements, Postgres RLS + GUC plumbing, explicit membership, default-deny permissions, PILOT tenant, cross-tenant-guard, lean 4-pillar gating (hide-not-delete) | (this commit) |
 
-### 16.1 Known limitations (v0.4.0)
+### 16.1 Known limitations (v0.5.0)
 
 1. **Shared dev password** — all demo users `admin123`; set per-user hashes for prod
 2. **No real-time updates** — frontend polls (BellDropdown 30s)
 3. **No mobile native apps** — web responsive only
-4. **HBG-only tenant seam** — no multi-tenant UI
+4. **RLS bootstrap hatch** — no-GUC sessions bypass RLS by design (migrations/seeds/login); enforcement depends on the app always setting the GUC (pool layer does)
 5. **No S3 driver** — local FS only (stub fails loud)
 6. **Audit log retention** — no auto-prune, grows forever
 7. **Flat departments** — no nesting (`parent_id` deferred)

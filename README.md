@@ -67,6 +67,23 @@ Tất cả tài khoản dùng chung mật khẩu dev: **`admin123`**.
 | `procurement@hbg.com` | Procurement — vật tư, hợp đồng |
 | `accounting@hbg.com` | Accounting — chuỗi thanh toán |
 
+Tenant pilot (gói Small, để kiểm chứng đa tenant): **`admin@pilot.test`** / `admin123`
+— chỉ thấy project `PILOT-001`, không có AR, không cấu hình chain, không bulk import.
+
+## 2b. Gói Small / Mid / Enterprise (4 trụ cột)
+
+| Khả năng | Small | Mid | Enterprise |
+|---|---|---|---|
+| P1 tiến độ %, báo cáo ngày + ảnh, OTD cơ bản | ✅ | ✅ | ✅ |
+| P2 shop single-step | ✅ | ✅ | ✅ + chain L1-L5 tùy biến |
+| P3 vật tư + submittal | ✅ cơ bản | ✅ + SLA 7d / TVGS 3d | ✅ |
+| P4 AP 4-step (hợp đồng → invoice → PR → chi) | ✅ (không AR) | ✅ + đọc AR | ✅ + AR full |
+| Issues / directives | ✅ issues | ✅ + directives | ✅ |
+| Portfolio, audit export, bulk Excel, KPI targets | — | portfolio đọc | ✅ |
+
+Gói lưu ở `tenants.plan` (`GET /api/me/entitlements`); thiếu quyền → API trả 403.
+HBG = Enterprise (đầy đủ, tương thích mọi test cũ).
+
 ## 3. Các role làm gì (súc tích)
 
 | Role | Được làm |

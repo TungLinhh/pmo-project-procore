@@ -253,6 +253,13 @@ export function FieldSync() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(null);
+  // Manual resolve is governance, not field work: foremen only SEE the queue
+  // status (Procore syncs transparently). Admin/CEO keep the buttons.
+  // Hidden, not deleted — backend POST /api/sync/resolve still enforces owner/admin.
+  // Note: CEO is role='pmo' + is_ceo flag (there is no 'ceo' role value).
+  const me = (() => { try { return JSON.parse(localStorage.getItem('pmo_user') || '{}'); } catch { return {}; } })();
+  const role = (me.role || '').toLowerCase();
+  const canResolve = role === 'admin' || me.is_ceo || role === 'pmo';
   const token = () => localStorage.getItem('pmo_token');
   const reload = () => {
     fetch('/api/sync/queue', { headers: { Authorization: `Bearer ${token()}` } })
@@ -314,6 +321,7 @@ export function FieldSync() {
                   </div>
                   <span className="badge" style={{ fontSize: 10 }}>{it.status || 'PENDING'}</span>
                 </div>
+                {canResolve && (
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button className="field-button secondary" style={{ fontSize: 11, padding: '6px 8px' }}
                     disabled={busy === it.id} onClick={() => resolve(it.id, 'SERVER')}>
@@ -324,6 +332,7 @@ export function FieldSync() {
                     Dùng offline
                   </button>
                 </div>
+                )}
               </li>
             ))}
           </ul>

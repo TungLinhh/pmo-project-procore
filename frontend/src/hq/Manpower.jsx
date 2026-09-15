@@ -98,13 +98,11 @@ export default function Manpower() {
         </div>
       </div>
 
-      {/* Tab switcher */}
+      {/* Tab switcher (Machinery hidden: no backend source — honest empty state
+          is still bloat in nav. Restored when an equipment feed exists.) */}
       <div className="filter-bar">
         <button className={tab === 'workers' ? 'btn' : 'btn btn-secondary'} onClick={() => setTab('workers')}>
           <ICON.manpower size={13} />Workers ({totalWorkers})
-        </button>
-        <button className={tab === 'machinery' ? 'btn' : 'btn btn-secondary'} onClick={() => setTab('machinery')}>
-          <ICON.bp size={13} />Machinery ({machines.reduce((s, m) => s + m.qty, 0)})
         </button>
         <button className={tab === 'teams' ? 'btn' : 'btn btn-secondary'} onClick={() => setTab('teams')}>
           <ICON.audit size={13} />Subcontractors ({subs.length})

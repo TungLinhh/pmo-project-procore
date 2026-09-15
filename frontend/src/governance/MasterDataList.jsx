@@ -2,8 +2,9 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { ICON } from '../icons.jsx';
-import { getToken, projects, masterData } from '../api/index.js';
+import { getToken, projects, masterData, preferDemoProject } from '../api/index.js';
 import { toast } from '../components/Toast.jsx';
+import ProjectPicker from '../components/ProjectPicker.jsx';
 
 const RESOURCES = [
   { key: 'subcontractors', label: 'Subcontractors', icon: ICON.manpower, fetch: () => masterData.subcontractors() },
@@ -11,7 +12,8 @@ const RESOURCES = [
   { key: 'business-processes', label: 'Business Processes', icon: ICON.bp, fetch: () => masterData.businessProcesses() },
   { key: 'projects',       label: 'Projects',       icon: ICON.folder,    fetch: () => projects.list() },
   { key: 'departments',    label: 'Departments',    icon: ICON.manpower, fetch: () => masterData.departments() },
-  { key: 'kpi-targets',    label: 'KPI Targets (43.10)', icon: ICON.bell, fetch: () => projects.kpiTargets(1) },
+  // KPI targets are per-project — picker below supplies the id (was hardcoded 1).
+  { key: 'kpi-targets',    label: 'KPI Targets (43.10)', icon: ICON.bell, fetch: (pid) => projects.kpiTargets(pid), needsProject: true },
 ];
 
 export default function MasterDataList() {
@@ -21,13 +23,19 @@ export default function MasterDataList() {
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
+  const [kpiProject, setKpiProject] = useState(null);
+
+  useEffect(() => {
+    projects.list().then(list => { if (!kpiProject) setKpiProject(preferDemoProject(list)); }).catch(() => {});
+  }, []);
 
   async function load() {
     setLoading(true);
     try {
       const r = RESOURCES.find(x => x.key === resource);
       if (!r) { setItems([]); return; }
-      const data = await r.fetch();
+      if (r.needsProject && !kpiProject) { setItems([]); return; }
+      const data = await r.fetch(kpiProject);
       setItems(Array.isArray(data) ? data : []);
     } catch (e) {
       toast.error('Lỗi tải ' + resource + ': ' + e.message);
@@ -36,7 +44,7 @@ export default function MasterDataList() {
       setLoading(false);
     }
   }
-  useEffect(() => { load(); }, [resource]);
+  useEffect(() => { load(); }, [resource, kpiProject]);
 
   const filtered = items.filter(i => JSON.stringify(i).toLowerCase().includes(search.toLowerCase()));
 
@@ -48,6 +56,9 @@ export default function MasterDataList() {
           <div className="meta">Quản lý dữ liệu nền tảng (43.2 + 43.10)</div>
         </div>
         <div className="page-header-right">
+          {resource === 'kpi-targets' && (
+            <ProjectPicker value={kpiProject} onChange={setKpiProject} placeholder="Chọn dự án..." />
+          )}
           <button className="btn" onClick={() => nav(`/hq/master-data/edit?r=${resource}`)}>
             <ICON.plus size={13} />Thêm mới
           </button>

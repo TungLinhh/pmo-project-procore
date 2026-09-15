@@ -6,6 +6,7 @@ import { Router } from 'express';
 import { requireAuth, currentUser } from '../lib/auth.js';
 import { permissionMiddleware } from '../lib/permission-middleware.js';
 import { getDb } from '../db/index.js';
+import { requireFeature } from '../lib/entitlements.js';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -39,7 +40,7 @@ router.get('/', async (req, res) => {
   res.json(rows);
 });
 
-router.get('/export', async (req, res) => {
+router.get('/export', requireFeature('audit-export'), async (req, res) => {
   const db = getDb();
   const { format = 'json', limit = 10000 } = req.query;
   const { sql: where, params } = buildWhere(req.query);

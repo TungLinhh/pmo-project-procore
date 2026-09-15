@@ -1,7 +1,7 @@
 // App Shell (UI-002) - role-based sidebar, icon đơn sắc
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
-import { getUser, setToken, setUser } from '../api/index.js';
+import { getUser, setToken, setUser, getToken } from '../api/index.js';
 import { ICON } from '../icons.jsx';
 import BellDropdown from './BellDropdown.jsx';
 import '../styles/hq.css';
@@ -24,8 +24,10 @@ const MENU = [
     { to: '/hq/notifications', label: 'Thông báo', icon: ICON.bell },
     { to: '/hq/master-data', label: 'Master Data', icon: ICON.database },
     { to: '/hq/approval', label: 'Approval', icon: ICON.check },
-    { to: '/hq/approval-chains', label: 'Cấu hình duyệt', icon: ICON.check },
-    { to: '/hq/audit', label: 'Audit Log', icon: ICON.audit },
+    // Enterprise-only: custom L1-L5 chains (lower plans use single-step).
+    { to: '/hq/approval-chains', label: 'Cấu hình duyệt', icon: ICON.check, flag: 'chains' },
+    // Enterprise-only: audit CSV/JSON export. In-app timeline stays everywhere.
+    { to: '/hq/audit', label: 'Audit Log', icon: ICON.audit, flag: 'audit-export' },
   ]},
 ];
 
@@ -59,6 +61,18 @@ export default function HqShell() {
   const role = (user.role || 'PMO').toUpperCase();
   const hide = ROLE_HIDE[role] || [];
   const nav = useNavigate();
+
+  // Plan entitlements (Small/Mid/Enterprise): hide enterprise-only nav items for
+  // lower plans. Backend requireFeature() still enforces — this is UX only.
+  // Default: show everything until entitlements load (no flicker-deny).
+  const [features, setFeatures] = useState(null);
+  const [plan, setPlan] = useState('');
+  useEffect(() => {
+    fetch('/api/me/entitlements', { headers: { Authorization: `Bearer ${getToken()}` } })
+      .then(r => r.json())
+      .then(j => { if (Array.isArray(j?.features)) { setFeatures(j.features); setPlan(j.plan || ''); } })
+      .catch(() => {});
+  }, []);
 
   // Theme: light/dark (lưu localStorage theo mặc định)
   const [theme, setTheme] = useState(() => {
@@ -113,7 +127,10 @@ export default function HqShell() {
         </div>
         <nav className="shell-menu" onClick={() => setDrawerOpen(false)}>
           {MENU.map(group => {
-            const items = group.items.filter(i => !hide.some(h => i.to.includes(h)));
+            const items = group.items.filter(i =>
+              !hide.some(h => i.to.includes(h)) &&
+              (!i.flag || features === null || features.includes(i.flag))
+            );
             if (items.length === 0) return null;
             return (
               <div key={group.group}>
@@ -135,7 +152,7 @@ export default function HqShell() {
           <div className="shell-avatar">{initials}</div>
           <div className="shell-user">
             <div className="shell-user-name">{user.full_name || user.email}</div>
-            <div className="shell-user-role">{user.role}</div>
+            <div className="shell-user-role">{user.role}{plan ? ` · ${plan}` : ''}</div>
           </div>
           <button className="field-icon-btn" style={{ padding: '4px 8px', minHeight: 28, fontSize: 11 }} onClick={logout}>
             <ICON.logout size={13} />

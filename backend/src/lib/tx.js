@@ -10,12 +10,17 @@
 //   });
 
 import { getPool } from '../db/index.js';
+import { currentTenantId, TENANT_GUC } from './tenant.js';
 export { getPool };
 
 export async function tx(fn) {
   const client = await getPool().connect();
   try {
     await client.query('BEGIN');
+    // RLS inside the transaction: SET LOCAL dies with COMMIT/ROLLBACK,
+    // so no reset needed and pooled reuse can never leak a tenant.
+    const tid = currentTenantId();
+    if (tid != null) await client.query(`SET LOCAL ${TENANT_GUC} = '${tid}'`);
     const result = await fn(client);
     await client.query('COMMIT');
     return result;

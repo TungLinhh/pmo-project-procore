@@ -8,8 +8,10 @@ import { getPermissions } from '../lib/permissions.js';
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
-// GET /api/me — current user info (id, email, name, role, tenant)
-router.get('/', (req, res) => {
+// GET /api/me — current user info (id, email, name, role, tenant + plan)
+router.get('/', async (req, res) => {
+  const { getEntitlements } = await import('../lib/entitlements.js');
+  const ent = await getEntitlements(req.user.tenant_id).catch(() => ({ plan: 'enterprise', features: [] }));
   res.json({
     id: req.user.id,
     email: req.user.email,
@@ -17,7 +19,15 @@ router.get('/', (req, res) => {
     full_name: req.user.full_name || req.user.name, // backward compat
     role: req.user.role,
     tenant_id: req.user.tenant_id,
+    plan: ent.plan,
   });
+});
+
+// GET /api/me/entitlements — plan + feature flags for nav gating (HqShell).
+// Frontend hides what the plan lacks; backend requireFeature() still enforces.
+router.get('/entitlements', async (req, res) => {
+  const { getEntitlements } = await import('../lib/entitlements.js');
+  res.json(await getEntitlements(req.user.tenant_id));
 });
 
 router.get('/permissions', (req, res) => {
