@@ -10,7 +10,7 @@ import { loginLimiter, refreshLimiter } from '../lib/rate-limit.js';
 
 const router = Router({ mergeParams: true });
 
-const publicUser = (u) => ({ id: u.id, email: u.email, full_name: u.name, role: u.role, is_ceo: !!u.is_ceo, tenant_id: u.tenant_id });
+const publicUser = (u) => ({ id: u.id, email: u.email, full_name: u.name, role: u.role, is_ceo: !!u.is_ceo, tenant_id: u.tenant_id, must_change_password: !!u.must_change_password });
 
 router.post('/login', loginLimiter, async (req, res) => {
   const db = getDb();
@@ -32,7 +32,14 @@ router.post('/login', loginLimiter, async (req, res) => {
   }
   const token = issueAccess(user);
   const refresh_token = await createRefreshToken(user.id);
-  res.json({ token, refresh_token, user: publicUser(user) });
+  const body = { token, refresh_token, user: publicUser(user) };
+  // Forced rotation (Wave 2 A2): temp password from admin reset. Tokens ARE
+  // issued (so the change-password call authenticates) but the client must
+  // branch to it — every other endpoint stays usable, matching "login works".
+  if (user.must_change_password) {
+    return res.status(403).json({ ...body, error: 'PASSWORD_CHANGE_REQUIRED', must_change_password: true });
+  }
+  res.json(body);
 });
 
 // Single-use refresh rotation. Old refresh dies even if the response is lost

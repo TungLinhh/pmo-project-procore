@@ -1,6 +1,6 @@
 # PMO MVP — Product Technical Documentation
 
-> **Version**: 0.7.0 · **Last updated**: 2026-09-15 · **Audience**: Engineers, technical PMs, integrators
+> **Version**: 0.8.0 · **Last updated**: 2026-09-15 · **Audience**: Engineers, technical PMs, integrators
 >
 > This document is the **single source of truth** for the PMO MVP. It replaces the previous collection of scattered docs (ARCHITECTURE, CODEBASE, USER_GUIDE, OPERATIONS, etc.). UML diagrams referenced from `docs/srs/`.
 
@@ -278,6 +278,8 @@ Located in `backend/drizzle/`, applied **exactly once** via the `schema_migratio
 | `9999e_schedule_scenarios.sql` | `schedule_scenarios` preview/apply/rollback ledger (rank 6) |
 | `9999f_site_holidays.sql` | `site_holidays` (global VN 2026–27 + per-tenant) + RLS (rank 7) |
 | `9999g_ai_foundation.sql` | AI routing/index/calls/drafts tables + RLS + `tenants.ai_monthly_cap_usd` (rank 8; needs `vector` ext — see §3.5) |
+| `9999h_app_role.sql` | Least-privilege `pmo_app` role + grants + default privileges (rank 9; needs CREATEROLE once — see §3.6) |
+| `9999i_password_flag.sql` | `users.must_change_password` (rank 10) |
 | `9991_project_members.sql` | Membership seam (HBG-only backfill) |
 | `9992_auth_session.sql` | Refresh tokens + denylist |
 | `9993_auth_password.sql` | `password_hash` (bcrypt) |
@@ -318,6 +320,13 @@ Sequences are resynced once at boot (`init.js`); inserts are single round-trip (
 - Semantic search needs the `vector` extension (pgvector 0.8.6, built from source against PG16; compose uses `pgvector/pgvector:pg16`).
 - `migrate.js` runs `CREATE EXTENSION IF NOT EXISTS vector` first; missing + uninstallable → loud remediation error, never half-boot.
 - **Hard lesson, locked in**: `ALTER USER ... SUPERUSER` (done once to install the extension) **silently disabled ALL RLS** — superusers bypass even `FORCE` policies. Caught by `cross-tenant-guard` (3 RLS checks went red). Fix: extension pre-installed into `template1` (inherited by every fresh/scratch DB), app role back to non-superuser, one-time DBA step documented here. Never grant the app role superuser again — Wave 2 replaces it with a dedicated least-privilege role instead.
+
+### 3.6 Least-privilege app role (v0.8.0)
+
+- Pool connects as `pmo_app` by default (`APP_DATABASE_URL` wins, else `APP_DB_USER`/`APP_DB_PASSWORD`, dev default `pmo_app/pmo_app_dev_pwd`). Rollback = `APP_DB_USER=pmo_user`.
+- `9999h` creates the role + DML grants on all tables + `USAGE` on sequences + `EXECUTE` on functions + default privileges for future pmo_user-created objects. Needs CREATEROLE once (compose bootstrap has it; local one-time socket grant).
+- `init.js` runs on the OWNER pool (`getOwnerDb`: migrations, DDL indexes, setval, seeds) and sets the role password from env each boot. Request traffic never touches the owner pool.
+- `tests/e2e/db-role.mjs` fails closed on missing grants, non-pmo_app pool user, superuser/BYPASSRLS, and RLS bypass.
 
 ---
 
@@ -621,6 +630,12 @@ Auto-includes `Authorization: Bearer <token>` from `localStorage.pmo_token`.
 
 **Note**: demo shares one dev password (per-user passwords never worked — the old hardcode accepted only `admin123`). Passwords ARE bcrypt-hashed; set per-user hashes before production.
 
+### 6.2b Password rotation (v0.8.0)
+
+- `POST /api/me/password {old_password, new_password}` (≥10 chars) — clears flag, bumps `token_version`, revokes refresh rows.
+- `POST /api/admin/users/:id/reset-password` (admin/CEO) — one-time temp (returned once), sets `must_change_password`, kills sessions, audit-logged.
+- Login with flag → `403 PASSWORD_CHANGE_REQUIRED` **with tokens** (so the change call authenticates); `requireAuth` gates everything else until changed. Login screen branches to the change form automatically.
+
 ### 6.3 Permission matrix
 
 | Action | admin | ceo | pm | pmo | site | procurement | accounting |
@@ -762,7 +777,6 @@ links (schedule_links, auto-chain bootstrap per zone ordinal)
 - Counters auto-incremented (`work_items_count`, `manpower_count`, etc.)
 
 ### 7.8 AI assistant (v0.7.0, Enterprise `ai-assistant`)
-
 Provider-switchable semantic search + SLA watcher, human-in-the-loop throughout.
 
 ```
@@ -778,6 +792,12 @@ provider routing (ai_provider_configs: purpose × provider/model/key-env/priorit
 - Every call logged (`ai_calls` + monthly cap, default $20, 429 on breach).
 - Mock adapter is semantic-preserving (hashed bag-of-words), so CI ranking tests mean something.
 - Non-goals v1: keyword fallback, auto-send, per-ERP agents.
+
+### 7.9 Field offline outbox (v0.8.0)
+
+- `POST /api/sync/enqueue {client_id, resource_type, server_record_id?, resource_json}` — validated against the SAME `SYNC_APPLIERS` allowlist as apply (never wider); idempotent replay by `(user_id, client_id)` (+ partial unique index, race-safe); existence checks deferred to flush.
+- Field `outbox.js`: localStorage queue (survives reload), auto-flush on reconnect with backoff, per-item status in `/field/sync` (+ manual retry, clear-dead). `DailyProgress` falls back to it on network failure (progress only — notes stay online-only).
+- Flush = existing resolve winners (explicit last-write-wins, audit `SYNC_APPLY`). Boundary: scalars only — no counters, money, or photo blobs.
 
 ---
 
@@ -1357,17 +1377,18 @@ docker compose restart backend
 | 2026-09-15 | Compression v0.6.0 | FS/SS/FF schedule_links + auto-chain, pure CPM engine, Enterprise-gated preview/apply/rollback scenarios, ProgressDetail panel, cpm/links/compress suites | (this commit) |
 | 2026-09-15 | Wave 1 quick wins v0.6.1 | Suspension gaps, site_holidays auto-merge, summary-row exclusion, login rate limiting + LOGIN_FAILED audit | (this commit) |
 | 2026-09-15 | AI layer v0.7.0 | pgvector (source-built) + template1 provisioning, switchable providers (env keys + DB routing), semantic index + scoped retrieval, assistant panel + SLA watcher drafts, cost caps, ai-assistant suite | (this commit) |
+| 2026-09-15 | Wave 2 v0.8.0 | Least-privilege pmo_app + owner pool split, password rotation + login gate, offline enqueue + field outbox, db-role/password-rotation/field-offline suites | (this commit) |
 
-### 16.1 Known limitations (v0.5.0)
+### 16.1 Known limitations (v0.8.0)
 
-1. **Shared dev password** — all demo users `admin123`; set per-user hashes for prod
+1. **Shared dev password** — demo users still `admin123` until rotated via the new endpoints
 2. **No real-time updates** — frontend polls (BellDropdown 30s)
 3. **No mobile native apps** — web responsive only
-4. **RLS bootstrap hatch** — no-GUC sessions bypass RLS by design (migrations/seeds/login); enforcement depends on the app always setting the GUC (pool layer does)
+4. **RLS bootstrap hatch** — no-GUC sessions bypass RLS by design (migrations/seeds/login); request traffic always sets the GUC (pool layer does)
 5. **No S3 driver** — local FS only (stub fails loud)
 6. **Audit log retention** — no auto-prune, grows forever
 7. **Flat departments** — no nesting (`parent_id` deferred)
-8. **No offline enqueue** — CLIENT apply works; field app posts online
+8. **Photos stay online** — offline outbox covers scalar edits only
 
 ### 16.2 Roadmap (suggested)
 

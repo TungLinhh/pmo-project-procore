@@ -2,9 +2,10 @@
 // Updated: gọi API thật cho material_submittals, area_hierarchy, issues (mục 43.4/43.8)
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { projects, issues as issuesApi, materials, daily, preferDemoProject } from '../api/index.js';
+import { projects, issues as issuesApi, materials, daily, preferDemoProject, getToken } from '../api/index.js';
 import { toast } from '../components/Toast.jsx';
 import { ICON } from '../icons.jsx';
+import { loadOutbox, flush, clearDead, wireAutoFlush } from './outbox.js';
 
 // ===== Material Usage (mục 43.4) =====
 export function FieldMaterial() {
@@ -253,6 +254,7 @@ export function FieldSync() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(null);
+  const [outbox, setOutbox] = useState([]);
   // Manual resolve is governance, not field work: foremen only SEE the queue
   // status (Procore syncs transparently). Admin/CEO keep the buttons.
   // Hidden, not deleted — backend POST /api/sync/resolve still enforces owner/admin.
@@ -266,7 +268,17 @@ export function FieldSync() {
       .then(r => r.json()).then(d => { setItems(Array.isArray(d) ? d : []); setLoading(false); })
       .catch(() => setLoading(false));
   };
-  useEffect(() => { reload(); }, []);
+  useEffect(() => { reload(); setOutbox(loadOutbox()); wireAutoFlush(getToken); }, []);
+  async function flushNow() {
+    setBusy('flush');
+    try {
+      await flush(getToken);
+    } finally {
+      setOutbox(loadOutbox());
+      reload();
+      setBusy(null);
+    }
+  }
   async function resolve(id, winner) {
     if (!window.confirm(winner === 'CLIENT' ? 'Ghi đè server bằng bản offline?' : 'Giữ bản server, bỏ bản offline?')) return;
     setBusy(id);
@@ -336,6 +348,38 @@ export function FieldSync() {
               </li>
             ))}
           </ul>
+        )}
+      </div>
+      {/* Local outbox (Wave 2 B2): edits queued on-device, not yet on server. */}
+      <div className="field-card" style={{ marginTop: 12 }}>
+        <h2>Outbox trên máy ({outbox.filter(i => i.status !== 'dead').length})</h2>
+        <p style={{ color: 'var(--c-text-2)', fontSize: 12, marginBottom: 12 }}>Đã lưu offline, chờ gửi khi có mạng</p>
+        {outbox.length === 0 ? <div className="meta">Trống — mọi thứ đã đồng bộ</div> : (
+          <>
+            <ul className="field-list">
+              {outbox.slice(0, 10).map(it => (
+                <li key={it.client_id}>
+                  <div>
+                    <div className="label" style={{ fontSize: 11 }}>{it.resource_type} #{it.server_record_id ?? '?'}</div>
+                    <div className="meta">{it.status}{it.last_error ? ` — ${it.last_error}` : ''} · thử {it.attempts} lần</div>
+                  </div>
+                  <span className="badge" style={{ fontSize: 10 }}>{it.status === 'dead' ? 'LỖI' : 'CHỜ'}</span>
+                </li>
+              ))}
+            </ul>
+            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              <button className="field-button" style={{ fontSize: 11, padding: '6px 8px' }}
+                disabled={busy === 'flush'} onClick={flushNow}>
+                Gửi lại ngay
+              </button>
+              {outbox.some(i => i.status === 'dead') && (
+                <button className="field-button secondary" style={{ fontSize: 11, padding: '6px 8px' }}
+                  onClick={() => { clearDead(); setOutbox(loadOutbox()); }}>
+                  Xóa mục lỗi
+                </button>
+              )}
+            </div>
+          </>
         )}
       </div>
     </div>

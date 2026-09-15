@@ -36,6 +36,8 @@ pg.types.setTypeParser(1700, (v) => (v === null ? null : parseFloat(v)));
 // DATABASE_URL wins when set; otherwise build from DB_* parts so
 // docker-compose / production envs (DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME)
 // work without extra wiring. Defaults match README local dev.
+// NOTE: this is the OWNER url (migrations/seeds/init). Request traffic uses
+// buildAppDatabaseUrl() below — least privilege.
 export function buildDatabaseUrl() {
   if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
   const user = process.env.DB_USER || 'pmo_user';
@@ -46,26 +48,55 @@ export function buildDatabaseUrl() {
   return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}/${name}`;
 }
 
+// APP pool url (Wave 2 A1): least-privilege pmo_app by default.
+// APP_DATABASE_URL wins outright; else same host/port/db with APP_DB_USER
+// (default pmo_app) + APP_DB_PASSWORD (default pmo_app_dev_pwd — dev only,
+// init.js sets the real role password from env each boot).
+// Escape hatch (rollback = one env var): APP_DB_USER=pmo_user.
+export function buildAppDatabaseUrl() {
+  if (process.env.APP_DATABASE_URL) return process.env.APP_DATABASE_URL;
+  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+  const user = process.env.APP_DB_USER || 'pmo_app';
+  const pass = process.env.APP_DB_PASSWORD || (user === 'pmo_app' ? 'pmo_app_dev_pwd' : 'pmo_dev_pwd');
+  const host = process.env.DB_HOST || '127.0.0.1';
+  const port = process.env.DB_PORT || '5433';
+  const name = process.env.DB_NAME || 'pmo';
+  return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}/${name}`;
+}
+
 const PG_URL = buildDatabaseUrl();
+const APP_PG_URL = buildAppDatabaseUrl();
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let _pgPool = null;
+let _ownerPool = null;
 
+function makePool(url) {
+  const pool = new Pool({
+    connectionString: url,
+    max: Number(process.env.PG_POOL_MAX) || 10,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 10_000,
+  });
+  // Unhandled 'error' on an idle client crashes node — log and continue.
+  pool.on('error', (err) => console.error('[pg pool]', err.message));
+  return pool;
+}
+
+// App pool for ALL request traffic (pmo_app by default).
 // Single pool for the whole backend — db.prepare(), db.exec(), db.upsert()
 // and tx() all share it (previously tx.js held a second pool, doubling
 // connections and breaking the "same pool" assumption).
 function getPool() {
-  if (!_pgPool) {
-    _pgPool = new Pool({
-      connectionString: PG_URL,
-      max: Number(process.env.PG_POOL_MAX) || 10,
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 10_000,
-    });
-    // Unhandled 'error' on an idle client crashes node — log and continue.
-    _pgPool.on('error', (err) => console.error('[pg pool]', err.message));
-  }
+  if (!_pgPool) _pgPool = makePool(APP_PG_URL);
   return _pgPool;
+}
+
+// Owner pool: migrations/seeds/init ONLY (DDL needs the owner; the app role
+// must never gain it). Separate pool, same wrapper API via getOwnerDb().
+function getOwnerPool() {
+  if (!_ownerPool) _ownerPool = makePool(PG_URL);
+  return _ownerPool;
 }
 
 // Convert `?` placeholders to PG-style `$1, $2, ...`
@@ -77,16 +108,17 @@ function convertSql(sql) {
 }
 
 class PgStatement {
-  constructor(sql) {
+  constructor(sql, poolFn = getPool) {
     this.sql = convertSql(sql);
     this._isInsert = sql.trim().toUpperCase().startsWith('INSERT');
     this._needsReturningId = this._isInsert && !/RETURNING/i.test(sql);
+    this._poolFn = poolFn;
   }
   // Every checkout applies the request tenant GUC (RLS, see lib/tenant.js) and
   // RESETs it on release — pooled connections must never leak a tenant.
   // No tenant in context (migrations/seeds/login) → no SET → hatch allows.
   async _withTenantClient(fn) {
-    const c = await getPool().connect();
+    const c = await this._poolFn().connect();
     let applied = false;
     try {
       applied = await applyTenantGuc(c);
@@ -148,15 +180,22 @@ async function tableHasId(client, sql) {
 }
 
 class DbWrapper {
-  prepare(sql) { return new PgStatement(sql); }
-  async exec(sql) { await getPool().query(sql); }
-  getPool() { return getPool(); }
+  constructor(poolFn = getPool) { this._poolFn = poolFn; }
+  prepare(sql) { return new PgStatement(sql, this._poolFn); }
+  async exec(sql) { await this._poolFn().query(sql); }
+  getPool() { return this._poolFn(); }
 }
 
 let _db = null;
+let _ownerDb = null;
 export function getDb() { if (!_db) _db = new DbWrapper(); return _db; }
-export { getPool };
-export async function closeDb() { if (_pgPool) { await _pgPool.end(); _pgPool = null; } }
+// Owner wrapper: migrations/seeds/init ONLY. Same API, owner pool.
+export function getOwnerDb() { if (!_ownerDb) _ownerDb = new DbWrapper(getOwnerPool); return _ownerDb; }
+export { getPool, getOwnerPool };
+export async function closeDb() {
+  if (_pgPool) { await _pgPool.end(); _pgPool = null; }
+  if (_ownerPool) { await _ownerPool.end(); _ownerPool = null; }
+}
 
 // =====================================================================
 // upsert(): unified INSERT ... ON CONFLICT helper. Replaces scattered
@@ -202,7 +241,7 @@ DbWrapper.prototype.upsert = async function(table, opts, row) {
 
   const sql = `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${placeholders})
                ON CONFLICT (${conflictCols.join(', ')}) ${conflictAction}`;
-  const c = await getPool().connect();
+  const c = await this._poolFn().connect();
   let appliedGuc = false;
   try {
     appliedGuc = await applyTenantGuc(c);

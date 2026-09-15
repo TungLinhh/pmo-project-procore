@@ -12,7 +12,7 @@ import { getDb } from '../db/index.js';
 import { withAudit } from '../lib/with-audit.js';
 import { resolveConflict } from '../lib/validation.js';
 import { checkTransition } from '../lib/transitions.js';
-import { applyClientPayload } from '../lib/sync-apply.js';
+import { applyClientPayload, validateSyncPayload } from '../lib/sync-apply.js';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -31,6 +31,59 @@ router.get('/queue', async (req, res) => {
     ORDER BY created_at ASC LIMIT 100
   `).allAsync(req.user.id);
   res.json(rows);
+});
+
+// POST /api/sync/enqueue — field outbox intake (Wave 2 B1). Shape-validated
+// against the SAME allowlist the apply path enforces (never widens it).
+// Idempotent: replayed client_id returns the existing PENDING row (deduped).
+// Existence/project checks are DEFERRED to flush time (offline clients submit
+// against possibly-stale local state — apply fails closed with 404/422 then).
+router.post('/enqueue', async (req, res) => {
+  const db = getDb();
+  const { client_id, resource_type, server_record_id = null, resource_json, client_timestamp = null, device_id = null } = req.body || {};
+  if (!client_id || typeof client_id !== 'string' || client_id.length > 100) {
+    return res.status(400).json({ error: 'client_id (uuid string ≤100) required — retries reuse it' });
+  }
+  if (server_record_id !== null && !Number.isInteger(server_record_id)) {
+    return res.status(400).json({ error: 'server_record_id must be integer or null' });
+  }
+  let patch;
+  try {
+    ({ patch } = validateSyncPayload(resource_type, resource_json));
+  } catch (e) {
+    return res.status(e.status || 400).json({ error: e.message });
+  }
+  try {
+    const dupe = await db.prepare(
+      `SELECT * FROM offline_sync_queue WHERE user_id = ? AND client_id = ? AND status = 'PENDING'`
+    ).getAsync(req.user.id, client_id);
+    if (dupe) return res.json({ ...dupe, deduped: true });
+    const info = await withAudit(req, {
+      action: 'ENQUEUE', resourceType: resource_type, resourceId: server_record_id,
+      context: { client_id },
+      after: { client_id, resource_type, server_record_id, patch },
+      note: `Offline enqueue ${resource_type}#${server_record_id ?? 'new'}`,
+    }, async (client) => {
+      const r = await client.query(
+        `INSERT INTO offline_sync_queue (user_id, device_id, client_id, resource_type, resource_json, client_timestamp, server_record_id, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING') RETURNING *`,
+        [req.user.id, device_id, client_id, resource_type, JSON.stringify({ ...resource_json, ...patch }),
+         client_timestamp || new Date().toISOString(), server_record_id]
+      );
+      return r.rows[0];
+    });
+    res.status(201).json(info);
+  } catch (e) {
+    // Concurrent double-enqueue: unique index wins, return the surviving row.
+    if (e && (e.code === '23505' || String(e.message).includes('offline_sync_queue_user_client_uq'))) {
+      const dupe = await db.prepare(
+        `SELECT * FROM offline_sync_queue WHERE user_id = ? AND client_id = ? AND status = 'PENDING'`
+      ).getAsync(req.user.id, client_id).catch(() => null);
+      if (dupe) return res.json({ ...dupe, deduped: true });
+    }
+    if (e && typeof e.status === 'number') return res.status(e.status).json({ error: e.message });
+    res.status(500).json({ error: e.message });
+  }
 });
 
 router.post('/resolve', async (req, res) => {

@@ -115,6 +115,17 @@ export async function requireAuth(req, res, next) {
     const token = auth && auth.startsWith('Bearer ') ? auth.slice(7) : null;
     const user = await verifyAccess(token);
     if (!user) return res.status(401).json({ error: 'Unauthorized. Đăng nhập để tiếp tục.' });
+    // Forced rotation gate (Wave 2 A2): temp password must be changed before
+    // ANYTHING else. Login still issues tokens (so the change call itself
+    // authenticates); allowlist is the only open surface. Fresh row every
+    // request → the gate lifts the moment the password changes.
+    if (user.must_change_password) {
+      const p = (req.originalUrl || '').split('?')[0];
+      const open = ['/api/me/password', '/api/auth/logout', '/api/auth/logout-all', '/api/me'];
+      if (!open.includes(p)) {
+        return res.status(403).json({ error: 'PASSWORD_CHANGE_REQUIRED', must_change_password: true });
+      }
+    }
     req.user = user;
     attachSession(req, user);
     // Establish the tenant context for the rest of this request: every pooled

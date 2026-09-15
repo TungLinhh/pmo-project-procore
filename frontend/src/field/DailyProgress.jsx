@@ -1,10 +1,11 @@
 // Field Daily Progress entry (mục 11)
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { projects, construction } from '../api/index.js';
+import { projects, construction, getToken } from '../api/index.js';
 import { toast } from '../components/Toast.jsx';
 import { ICON } from '../icons.jsx';
 import ProjectPicker from '../components/ProjectPicker.jsx';
+import { enqueue, wireAutoFlush } from './outbox.js';
 
 export default function DailyProgress() {
   const nav = useNavigate();
@@ -19,6 +20,7 @@ export default function DailyProgress() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    wireAutoFlush(getToken);
     projects.list().then(list => {
       setAllProjects(list);
       if (list[0]) setSelectedProject(list[0].id);
@@ -39,15 +41,29 @@ export default function DailyProgress() {
   async function save(status) {
     if (!selectedItem) return;
     setSaving(true);
+    const pct = Number(progress) / 100;
     try {
       await construction.updateProgress(selectedProject, selectedItem, {
-        progress_pct: Number(progress) / 100,
+        progress_pct: pct,
         note: notes ? `[site ${status}] ${notes}` : `[site ${status}]`,
       });
       toast.success(`Đã ${status}: ${progress}%`);
       nav('/field/home');
     } catch (e) {
-      toast.error('Lỗi: ' + e.message);
+      // Offline (or flaky site network): queue progress locally, flush on reconnect.
+      // Notes are online-only (not in the sync allowlist) — progress is what matters.
+      const offline = e instanceof TypeError || /Failed to fetch|NetworkError|Load failed/i.test(e.message || '');
+      if (offline) {
+        enqueue({
+          resource_type: 'construction_schedule_item',
+          server_record_id: Number(selectedItem),
+          resource_json: { progress_pct: pct },
+        });
+        toast.success(`Đã lưu offline ${progress}% — sẽ gửi khi có mạng (xem /field/sync)`);
+        nav('/field/home');
+      } else {
+        toast.error('Lỗi: ' + e.message);
+      }
     } finally { setSaving(false); }
   }
 

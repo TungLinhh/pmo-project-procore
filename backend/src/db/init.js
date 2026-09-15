@@ -1,13 +1,13 @@
-// Database initialization — PG only.
-// Migrations run through the schema_migrations ledger (lib: ./migrate.js),
-// then unique indexes + idempotent seeds below.
+// Database initialization — PG only. OWNER pool throughout: migrations, DDL
+// indexes, setval resync and seeds all need ownership. Request traffic never
+// touches this pool (see db/index.js getDb vs getOwnerDb).
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { getDb, closeDb } from './index.js';
+import { getOwnerDb, closeDb } from './index.js';
 import { runMigrations } from './migrate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const db = getDb();
+const db = getOwnerDb();
 
 console.log('Initializing PostgreSQL database...');
 
@@ -18,6 +18,19 @@ try {
   console.log(`✓ Migrations: ${ran} applied, ${skipped} already applied (${total} files)`);
 } catch (e) {
   console.error(`❌ Migration FAILED — aborting init: ${e.message}`);
+  await closeDb();
+  process.exit(1);
+}
+
+// App role password (Wave 2 A1): set from env every boot so rotation = restart.
+// AFTER migrations — fresh DBs only gain the role from 9999h. Dev default
+// matches buildAppDatabaseUrl(); production MUST set APP_DB_PASSWORD.
+try {
+  const appPass = process.env.APP_DB_PASSWORD || 'pmo_app_dev_pwd';
+  await db.exec(`ALTER ROLE pmo_app WITH LOGIN PASSWORD '${appPass.replace(/'/g, "''")}'`);
+  console.log('✓ App role password ensured');
+} catch (e) {
+  console.error(`❌ App role password FAILED (needs 9999h applied): ${e.message}`);
   await closeDb();
   process.exit(1);
 }
@@ -36,6 +49,10 @@ for (const idx of requiredIndexes) {
   await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ${idx.name} ON ${idx.table} (${idx.cols.join(', ')})`);
 }
 console.log(`✓ Ensured ${requiredIndexes.length} unique indexes for upsert()`);
+// Offline outbox dedupe (Wave 2 B1): one PENDING row per (user, client_id).
+// Resolved rows keep history (same client_id may recur after resolve).
+await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS offline_sync_queue_user_client_uq
+  ON offline_sync_queue (user_id, client_id) WHERE status = 'PENDING'`);
 
 // Seed default tenant + project for demo
 const tenantExists = await db.prepare('SELECT id FROM tenants WHERE code = ?').getAsync('hbg');

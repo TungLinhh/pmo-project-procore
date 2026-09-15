@@ -100,7 +100,12 @@ async function request(path, opts = {}) {  const headers = { ...(opts.headers ||
   }
   if (!r.ok) {
     const e = await r.json().catch(() => ({ error: r.statusText }));
-    throw new Error(e.error || 'Request failed');
+    // Attach status + body: flows like forced password change (403 with token
+    // inside) need the payload, not just the message.
+    const err = new Error(e.error || 'Request failed');
+    err.status = r.status;
+    err.response = e;
+    throw err;
   }
   return r.status === 204 ? null : r.json();
 }

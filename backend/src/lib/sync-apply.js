@@ -23,6 +23,28 @@ export const SYNC_APPLIERS = {
   },
 };
 
+// Shared shape validation (B1): enqueue-time gate AND documentation source.
+// Returns { patch } (validated appliable fields) or throws { status, message }.
+// Anything outside SYNC_APPLIERS → 422, same verdict the apply path gives.
+export function validateSyncPayload(resource_type, payload) {
+  const spec = SYNC_APPLIERS[resource_type];
+  if (!spec) {
+    throw { status: 422, message: `resource_type '${resource_type}' is not enqueueable (allowlist: ${Object.keys(SYNC_APPLIERS).join(', ')})` };
+  }
+  const body = payload && typeof payload === 'object' ? payload : {};
+  const patch = {};
+  for (const [field, validate] of Object.entries(spec.fields)) {
+    if (!(field in body)) continue;
+    const err = validate(body[field]);
+    if (err) throw { status: 422, message: err };
+    patch[field] = body[field];
+  }
+  if (!Object.keys(patch).length) {
+    throw { status: 400, message: `payload has no appliable fields (allowed: ${Object.keys(spec.fields).join(', ')})` };
+  }
+  return { patch };
+}
+
 // Apply item.resource_json onto item.server_record_id inside the caller's tx.
 // Returns { before, after } for the audit log. Throws { status, message }.
 export async function applyClientPayload(client, checkAccess, item) {

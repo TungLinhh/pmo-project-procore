@@ -24,6 +24,11 @@ export default function Login() {
   const [password, setPassword] = useState('admin123');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  // Forced rotation (Wave 2 A2): login answers 403 + token; collect the new
+  // password on this screen instead of entering the app locked-out.
+  const [forceChange, setForceChange] = useState(null); // { token, refresh_token, user }
+  const [newPw1, setNewPw1] = useState('');
+  const [newPw2, setNewPw2] = useState('');
   const isField = loc.pathname.startsWith('/field');
 
   function fillAccount(acc) {
@@ -45,7 +50,37 @@ export default function Login() {
       const isSiteRole = String(r.user.role || '').toLowerCase() === 'site';
       nav(isField || isSiteRole ? '/field' : '/hq', { replace: true });
     } catch (e) {
-      setError(e.message || 'Đăng nhập thất bại');
+      if (e.status === 403 && e.response?.must_change_password && e.response?.token) {
+        setToken(e.response.token);
+        if (e.response.refresh_token) setRefreshToken(e.response.refresh_token);
+        setForceChange(e.response);
+        setError(null);
+      } else {
+        setError(e.message || 'Đăng nhập thất bại');
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitChange(e) {
+    e.preventDefault();
+    setError(null);
+    if (newPw1 !== newPw2) { setError('Mật khẩu nhập lại không khớp'); return; }
+    if (newPw1.length < 10) { setError('Mật khẩu tối thiểu 10 ký tự'); return; }
+    setBusy(true);
+    try {
+      const r = await fetch('/api/me/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${forceChange.token}` },
+        body: JSON.stringify({ old_password: password, new_password: newPw1 }),
+      }).then(r => r.json());
+      if (r.error) throw new Error(r.error);
+      setUser(forceChange.user);
+      const isSiteRole = String(forceChange.user.role || '').toLowerCase() === 'site';
+      nav(isField || isSiteRole ? '/field' : '/hq', { replace: true });
+    } catch (err) {
+      setError(err.message || 'Đổi mật khẩu thất bại');
     } finally {
       setBusy(false);
     }
@@ -65,6 +100,24 @@ export default function Login() {
         <div className="legal">© 2026 O-Nexus · PMO MVP</div>
       </div>
       <div className="login-form">
+        {forceChange ? (
+          <form className="login-card" onSubmit={submitChange}>
+            <h2>Đổi mật khẩu</h2>
+            <div className="sub">Tài khoản {forceChange.user?.email} dùng mật khẩu tạm — đặt mật khẩu mới (≥10 ký tự) để tiếp tục</div>
+            <div className="login-field">
+              <label>Mật khẩu mới</label>
+              <input type="password" value={newPw1} onChange={e => setNewPw1(e.target.value)} required autoComplete="new-password" />
+            </div>
+            <div className="login-field">
+              <label>Nhập lại mật khẩu mới</label>
+              <input type="password" value={newPw2} onChange={e => setNewPw2(e.target.value)} required autoComplete="new-password" />
+            </div>
+            <button className="login-submit" type="submit" disabled={busy}>
+              {busy ? 'Đang xử lý...' : 'ĐỔI MẬT KHẨU'}
+            </button>
+            {error && <div className="login-error">{error}</div>}
+          </form>
+        ) : (
         <form className="login-card" onSubmit={submit}>
           <h2>Đăng nhập</h2>
           <div className="sub">Tiếp tục vào không gian làm việc của bạn</div>
@@ -95,6 +148,7 @@ export default function Login() {
             </div>
           </div>
         </form>
+        )}
       </div>
     </div>
   );
