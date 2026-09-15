@@ -1,0 +1,31 @@
+{
+  "name": "pmo-mvp",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "PMO (Project Management Office) MVP — construction project tracking, KPI, shop drawings, material submittals, payments",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm:dev:backend\" \"npm:dev:frontend\"",
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "build": "npm run build --workspace=frontend",
+    "start": "npm run start --workspace=backend",
+    "test": "node tests/e2e/api.mjs && node tests/e2e/payment-sla.mjs && node tests/e2e/shop-approval.mjs && node tests/e2e/schema.mjs",
+    "test:api": "node tests/e2e/api.mjs",
+    "test:payment": "node tests/e2e/payment-sla.mjs",
+    "test:shop": "node tests/e2e/shop-approval.mjs",
+    "test:schema": "node tests/e2e/schema.mjs",
+    "test:browser": "node tests/e2e/browser.mjs",
+    "test:all": "npm test && npm run test:browser && node tests/tools/schema-audit.mjs",
+    "lint": "npm run lint --workspaces --if-present",
+    "audit:schema": "node tests/tools/schema-audit.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "concurrently": "^9.0.1"
+  }
+}

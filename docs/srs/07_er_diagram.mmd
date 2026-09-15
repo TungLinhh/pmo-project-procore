@@ -1,0 +1,174 @@
+erDiagram
+  TENANT ||--o{ USER : "has"
+  TENANT ||--o{ PROJECT : "owns"
+  TENANT ||--o{ DEPARTMENT : "organizes"
+  TENANT ||--o{ APPROVAL_CHAIN : "configures"
+  TENANT ||--o{ ZONE : "has"
+  TENANT ||--o{ NOTIFICATION : "sends"
+  TENANT ||--o{ AUDIT_LOG : "records"
+  TENANT ||--o{ FILE_UPLOAD : "stores"
+
+  DEPARTMENT ||--o{ PROJECT : "scopes"
+  DEPARTMENT ||--o{ USER : "employs"
+  DEPARTMENT ||--o{ APPROVAL_CHAIN : "overrides"
+
+  USER ||--o{ AUDIT_LOG : "performed"
+  USER ||--o{ NOTIFICATION : "receives"
+  USER ||--o{ DIRECTIVE : "issued"
+
+  PROJECT ||--o{ ZONE : "divided_into"
+  PROJECT ||--o{ SHOP_DRAWING : "has"  PROJECT ||--o{ MATERIAL : "uses"
+  PROJECT ||--o{ CONSTRUCTION_SCHEDULE_ITEM : "tracks"
+  PROJECT ||--o{ CONTRACT : "signs"
+  PROJECT ||--o{ ISSUE : "encounters"
+  PROJECT ||--o{ KPI : "measured_by"
+  PROJECT ||--o{ PAYMENT_REQUEST : "billed_by"
+
+  ZONE ||--o{ SHOP_DRAWING : "groups"
+  ZONE ||--o{ MATERIAL : "groups"
+  ZONE ||--o{ CONSTRUCTION_SCHEDULE_ITEM : "groups"
+  ZONE ||--o{ ISSUE : "located_in"
+
+  MATERIAL ||--o{ MATERIAL_SUBMITTAL : "submits"
+  MATERIAL_SUBMITTAL }o--|| MATERIAL_SUBMITTAL : "supersedes"
+
+  CONTRACT ||--o{ INVOICE : "bills"
+  INVOICE ||--o{ PAYMENT_REQUEST : "requests"
+
+  ISSUE ||--o{ DIRECTIVE : "directed_by"
+  ISSUE ||--o{ NOTIFICATION : "triggers"
+  DIRECTIVE ||--o{ NOTIFICATION : "notifies"
+
+  TENANT {
+    int id PK
+    string code
+    string name_vi
+    string name_en
+    string subscription_tier
+  }
+  USER {
+    int id PK
+    int tenant_id FK
+    string email
+    string password_hash
+    string full_name
+    string role
+    boolean is_ceo
+  }
+  PROJECT {
+    int id PK
+    int tenant_id FK
+    string code UK
+    string name_vi
+    string package
+    int department_id FK
+  }
+  DEPARTMENT {
+    int id PK
+    int tenant_id FK
+    string code UK
+    string name_vi
+  }
+  APPROVAL_CHAIN {
+    int id PK
+    int tenant_id FK
+    int department_id FK
+    string resource_type
+    jsonb levels
+  }
+  AUTH_REFRESH_TOKEN {
+    int id PK
+    int user_id FK
+    string token_hash
+  }
+  SCHEMA_MIGRATION {
+    string filename PK
+    string checksum
+  }
+  ZONE {
+    int id PK
+    int tenant_id FK
+    int project_id FK
+    string code
+    string name_vi
+  }
+  SHOP_DRAWING {
+    int id PK
+    int project_id FK
+    int zone_id FK
+    string drawing_code
+    string status
+    string bql_l1_response
+    string bql_l2_response
+    string bql_l3_response
+    string bql_l4_response
+  }
+  MATERIAL {
+    int id PK
+    int project_id FK
+    int zone_id FK
+    string material_code
+    float progress_pct
+  }
+  MATERIAL_SUBMITTAL {
+    int id PK
+    int material_id FK
+    string submittal_code
+    string status
+    date sla_deadline
+    int parent_submittal_id FK
+  }
+  CONTRACT {
+    int id PK
+    int project_id FK
+    string contract_no
+    decimal total_value
+  }
+  INVOICE {
+    int id PK
+    int contract_id FK
+    string invoice_no
+    decimal amount
+  }
+  PAYMENT_REQUEST {
+    int id PK
+    int invoice_id FK
+    string request_no
+    decimal amount
+    string status
+  }
+  ISSUE {
+    int id PK
+    int project_id FK
+    int zone_id FK
+    string severity
+    string status
+  }
+  DIRECTIVE {
+    int id PK
+    int project_id FK
+    int issue_id FK
+    text body
+  }
+  NOTIFICATION {
+    int id PK
+    int user_id FK
+    int project_id FK
+    string channel
+    string delivery_status
+  }
+  AUDIT_LOG {
+    int id PK
+    int user_id FK
+    string action
+    string resource_type
+    text note
+  }
+  FILE_UPLOAD {
+    int id PK
+    string file_hash UK
+    string doc_type
+    int project_id FK
+    int zone_id FK
+    string status
+  }

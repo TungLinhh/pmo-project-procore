@@ -1,0 +1,86 @@
+# ===== Git / metadata =====
+.git
+.gitignore
+.github
+.gitattributes
+
+# ===== Documentation =====
+docs/
+
+# ===== Test files =====
+tests/
+_e2e_*.mjs
+_schema_audit*.mjs
+_test_picker.mjs
+playwright.config.*
+playwright-report/
+
+# ===== CI / scripts (dev only) — keep docker-entrypoint.sh IN build context =====
+**/.github
+**/.circleci
+**/.gitlab-ci.yml
+**/Dockerfile
+**/docker-compose*.yml
+**/.dockerignore
+docker-compose.yml
+# NOTE: docker-entrypoint.sh must stay IN the build context —
+# Dockerfile COPYs it to /usr/local/bin/. Do not ignore it.
+
+# ===== Node / dependencies =====
+node_modules
+**/node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm
+.yarn
+
+# ===== Build outputs =====
+dist
+build
+out
+*.tsbuildinfo
+.vite
+.cache
+
+# ===== Environment / secrets =====
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.cert
+*.p12
+credentials.json
+secrets.json
+
+# ===== Local data (mounted as volume, not baked into image) =====
+data/
+backend/data/
+backend/uploads/
+data/test-fixtures/
+data/pgdata/
+
+# ===== IDE / OS =====
+.idea
+.vscode
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.directory
+.Trash-*
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== Runtime scratch (demo zips, /tmp) — never baked =====
+/tmp/
+**/tmp/
+
+# ===== Reference sheets (large PDFs, ingested via UI at runtime) =====
+reference_sheets/
+reference_sheets_extra/

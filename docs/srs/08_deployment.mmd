@@ -1,0 +1,55 @@
+flowchart TB
+  subgraph Client [Client Devices]
+    WB[Web Browser<br/>Chrome/Firefox/Safari<br/>Desktop, Tablet, Mobile]
+  end
+
+  subgraph DMZ [DMZ / Public]
+    CF[Cloudflare Tunnel<br/>public URL]
+  end
+
+  subgraph Server [Application Server]
+    N[Node.js 22]
+    subgraph App [Express App port 3000]
+      API[REST API<br/>24 routers]
+      STATIC[Static serve<br/>frontend/dist/]
+      AUTH[JWT access 24h<br/>+ rotating refresh 30d]
+    end
+    subgraph Frontend [Vite-built React SPA]
+      HQ[HQ Module]
+      FL[Field PWA]
+      GV[Governance + ChainConfig]
+      WIZ[Upload Wizard]
+    end
+  end
+
+  subgraph Data [Data Layer]
+    PG[(PostgreSQL 16<br/>51 tables<br/>migration ledger)]
+    FS[Uploads volume<br/>UPLOADS_DIR<br/>content-addressed keys]
+  end
+
+  subgraph Deploy [Deploy targets]
+    DC[Docker Compose<br/>postgres + init + app]
+    CO[Coolify<br/>Dockerfile + DATABASE_URL/JWT_SECRET]
+  end
+
+  subgraph External [External]
+    EXCEL[Excel Files<br/>user uploads]
+  end
+
+  WB -->|HTTPS| CF
+  CF -->|HTTP localhost:3000| N
+  N --> API
+  N --> STATIC
+  API --> AUTH
+  API --> PG
+  API --> FS
+  STATIC --> Frontend
+  EXCEL -.->|multipart| API
+  Frontend -.->|JSON over HTTPS| API
+  DC -.->|runs| N
+  CO -.->|runs| N
+
+  style CF fill:#FFB6C1
+  style PG fill:#90EE90
+  style FS fill:#FFE4B5
+  style EXCEL fill:#E6E6FA

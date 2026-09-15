@@ -1,0 +1,82 @@
+# ===== Node / dependencies =====
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm/
+.yarn/
+
+# ===== Build outputs =====
+dist/
+build/
+out/
+*.tsbuildinfo
+.vite/
+.cache/
+frontend/dist/
+
+# ===== Environment / secrets =====
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.cert
+*.p12
+credentials.json
+secrets.json
+
+# ===== Local data (KHÔNG commit data thật) =====
+data/
+backend/data/
+backend/uploads/
+data/test-fixtures/
+backend/scripts/archive/pmo-*.db
+
+# ===== PostgreSQL data dirs (local dev) =====
+data/pgdata/
+data/pg_wal/
+data/pg_log/
+data/pg_stat_tmp/
+data/pg_replslot/
+data/pg_twophase/
+data/pg_snapshots/
+data/pg_serial/
+data/pg_dynshmem/
+data/pg_notify/
+data/pg_commit_ts/
+data/pg_xact/
+data/pg_multixact/
+data/pg_subtrans/
+data/pg_dist_plat/
+data/pg_tblspc/
+data/pg_global/
+
+# ===== IDE / OS =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.directory
+.Trash-*
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== Test outputs =====
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+
+# ===== Reference sheets (large PDFs from user) =====
+reference_sheets/
+
+# ===== Misc =====
+.openclaw/

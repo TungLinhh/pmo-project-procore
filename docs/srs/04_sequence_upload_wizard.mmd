@@ -1,0 +1,58 @@
+sequenceDiagram
+  actor U as User (HQ)
+  participant W as UploadWizard (React)
+  participant API as Express API
+  participant WR as Wizard Router
+  participant ING as Ingestor
+  participant DB as PostgreSQL
+
+  U->>W: Step 0: Drag-drop Excel file
+  W->>API: POST /api/upload (multipart)
+  API->>API: Multer save file to data/uploads/
+  API->>API: SHA-256 hash file
+  API->>DB: Check file_uploads WHERE file_hash = ?
+  alt Trùng hash
+    API-->>W: 200 {status: IDEMPOTENT, ...}
+  else Hash mới
+    API->>API: detectDocType(filename)
+    API->>DB: INSERT INTO file_uploads (..., status='PENDING')
+    API->>ING: ingest(filePath, docType)
+    ING->>DB: findOrCreateProject + findOrCreateZone
+    ING->>DB: INSERT INTO shop_drawings/materials/...
+    ING-->>API: {ok: 50, errors: 0}
+    API->>DB: UPDATE file_uploads SET status='SUCCESS', ok_rows=50
+    API-->>W: 200 {upload_id, status: SUCCESS, ok: 50}
+  end
+
+  W->>U: Step 0 → Step 1 (Cấu hình)
+
+  U->>W: Step 1: Chọn project + zone + doc_type
+  W->>API: POST /api/projects (nếu tạo mới)
+  API->>DB: INSERT project → trả {id, code}
+  API-->>W: 201 {id, code}
+  W->>API: POST /api/projects/:id/zones (nếu tạo zone)
+  API->>DB: INSERT zone → trả {id, code}
+  API-->>W: 201 {id, code}
+  W->>API: POST /api/upload/:id/configure
+  API->>WR: configure handler
+  WR->>DB: SELECT project, zone theo id
+  WR->>ING: parse(filePath, {projectId, zoneCode})
+  ING-->>WR: {sheets: [{name, rows: [...]}], total_rows: 50}
+  WR->>DB: UPDATE file_uploads SET report_json=..., project_id=..., zone_id=...
+  WR-->>W: 200 {project, zone, sheets, total_rows}
+  W->>U: Step 1 → Step 2 (Xem trước)
+
+  U->>W: Step 2: Xem preview bảng
+  W->>U: Hiển thị 3 rows mẫu/sheet + tổng rows
+  U->>W: Click "Xác nhận Insert"
+  W->>API: POST /api/upload/:id/commit
+  API->>DB: SELECT report_json (cached preview)
+  API->>ING: commit(parsed, {projectId, zoneCode})
+  ING->>DB: UPSERT rows (hoặc INSERT, không parse lại)
+  ING-->>API: {ok: 50, errors: 0, zone: 'BOH'}
+  API->>DB: UPDATE file_uploads SET status='SUCCESS', ok_rows=50
+  API-->>W: 200 {ok: 50, errors: 0, zone: 'BOH'}
+  W->>U: Step 2 → Step 3 (Hoàn tất)
+  W->>U: "Insert thành công 50 rows! Zone: BOH"
+  U->>W: Click "Đóng"
+  W->>U: Wizard đóng, navigate về /hq

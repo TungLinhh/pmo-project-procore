@@ -1,0 +1,242 @@
+classDiagram
+  class Tenant {
+    +int id
+    +string code
+    +string name_vi
+    +string name_en
+    +string subscription_tier
+    +Date created_at
+  }
+
+  class User {
+    +int id
+    +int tenant_id
+    +string email
+    +string password_hash
+    +string full_name
+    +string role
+    +boolean is_ceo
+    +boolean is_active
+    +Date last_login
+  }
+
+  class Project {
+    +int id
+    +int tenant_id
+    +string code
+    +string name_vi
+    +string name_en
+    +string package
+    +string rev_prefix
+    +string status
+    +int department_id
+  }
+
+  class Department {
+    +int id
+    +int tenant_id
+    +string code
+    +string name_vi
+  }
+
+  class ApprovalChain {
+    +int id
+    +int tenant_id
+    +int department_id
+    +string resource_type
+    +jsonb levels
+  }
+
+  class Zone {
+    +int id
+    +int tenant_id
+    +int project_id
+    +string code
+    +string name_vi
+    +string name_en
+  }
+
+  class ShopDrawing {
+    +int id
+    +int project_id
+    +int zone_id
+    +string drawing_code
+    +string name_vi
+    +string name_en
+    +float progress_pct
+    +string status
+    +text notes
+    +date planned_submit_date
+    +date actual_submit_date
+    +string bql_l1_response
+    +text bql_l1_comment
+    +date bql_l1_date
+    +string bql_l2_response
+    +string bql_l3_response
+    +string bql_l4_response
+    +string bql_l5_response
+    +text rejection_reason
+  }
+
+  class Material {
+    +int id
+    +int project_id
+    +int zone_id
+    +string material_code
+    +string name_vi
+    +string name_en
+    +float progress_pct
+  }
+
+  class MaterialSubmittal {
+    +int id
+    +int project_id
+    +int material_id
+    +string submittal_code
+    +string status
+    +int sla_days
+    +date sla_deadline
+    +int revision_number
+    +int parent_submittal_id
+    +int submitted_by
+    +date submitted_date
+    +int approved_by
+    +date approved_date
+    +text rejection_reason
+  }
+
+  class PaymentRequest {
+    +int id
+    +int invoice_id
+    +string request_no
+    +date request_date
+    +decimal amount
+    +decimal retention_amount
+    +date due_date
+    +string status
+    +int approved_by
+    +date approved_date
+    +text notes
+  }
+
+  class Issue {
+    +int id
+    +int tenant_id
+    +int project_id
+    +int zone_id
+    +string source_resource
+    +int source_id
+    +string title
+    +text body
+    +string category
+    +string severity
+    +string status
+    +int owner_user_id
+  }
+
+  class Directive {
+    +int id
+    +int tenant_id
+    +int project_id
+    +int issue_id
+    +int from_user_id
+    +string from_user_name
+    +text body
+    +string notify_to_user_ids
+  }
+
+  class Notification {
+    +int id
+    +int tenant_id
+    +int user_id
+    +int project_id
+    +int issue_id
+    +string channel
+    +string delivery_status
+    +string severity
+    +string title
+    +text body
+    +string resource_type
+    +int resource_id
+    +date read_at
+    +date sent_at
+  }
+
+  class AuditLog {
+    +int id
+    +int tenant_id
+    +int user_id
+    +string user_name
+    +string action
+    +string resource_type
+    +int resource_id
+    +jsonb before
+    +jsonb after
+    +jsonb context
+    +jsonb field_changes
+    +text note
+    +Date created_at
+  }
+
+  class AuthRefreshToken {
+    +int id
+    +int user_id
+    +string token_hash
+    +Date expires_at
+    +Date revoked_at
+  }
+
+  class SchemaMigration {
+    +string filename
+    +string checksum
+    +Date applied_at
+  }
+
+  class FileUpload {
+    +int id
+    +int tenant_id
+    +string filename
+    +string file_hash
+    +string doc_type
+    +int project_id
+    +int zone_id
+    +string status
+    +jsonb report_json
+    +int total_rows
+    +int ok_rows
+    +int error_rows
+  }
+
+  class KPI {
+    +int id
+    +int project_id
+    +string period_code
+    +string metric_code
+    +decimal target_value
+    +decimal actual_value
+    +boolean is_locked
+  }
+
+  Tenant "1" --> "*" User
+  Tenant "1" --> "*" Project
+  Tenant "1" --> "*" Department
+  Tenant "1" --> "*" ApprovalChain
+  Tenant "1" --> "*" Zone
+  Tenant "1" --> "*" Issue
+  Tenant "1" --> "*" Notification
+  Tenant "1" --> "*" AuditLog
+  Project "1" --> "*" Zone
+  Project "1" --> "*" ShopDrawing
+  Project "1" --> "*" Material
+  Project "1" --> "*" Issue
+  Project "1" --> "*" KPI
+  Department "1" --> "*" Project
+  Department "1" --> "*" User
+  Department "1" --> "*" ApprovalChain
+  Zone "1" --> "*" ShopDrawing
+  Zone "1" --> "*" Material
+  Material "1" --> "*" MaterialSubmittal
+  MaterialSubmittal "1" --> "0..1" MaterialSubmittal : parent
+  Issue "1" --> "*" Directive
+  Directive "1" --> "*" Notification
+  User "1" --> "*" AuditLog

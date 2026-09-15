@@ -1,0 +1,35 @@
+stateDiagram-v2
+  [*] --> DRAFT: Tạo mới / Upload
+
+  DRAFT --> SUBMITTED: PM gửi duyệt (transition)
+  SUBMITTED --> APPROVED: Duyệt 1 bước (không chain / chain 1 level)
+  SUBMITTED --> REJECTED: Từ chối (bắt buộc lý do)
+
+  state ChainApproval {
+    [*] --> L1: Chain ≥ 2 levels
+    L1 --> L2: Pass đúng role L1 (approve-level)
+    L2 --> L3: Pass đúng role L2
+    L3 --> L4: Pass đúng role L3
+    L4 --> L5: Pass đúng role L4
+    L1 --> REJECTED: Fail ở L1
+    L2 --> REJECTED: Fail ở L2
+    L3 --> REJECTED: Fail ở L3
+    L4 --> REJECTED: Fail ở L4
+    L5 --> REJECTED: Fail ở L5
+    L5 --> APPROVED: Pass level cuối
+  }
+
+  SUBMITTED --> ChainApproval: Chain nhiều levels
+  ChainApproval --> APPROVED: Pass hết
+  ChainApproval --> REJECTED: Fail level bất kỳ
+
+  REJECTED --> DRAFT: PM sửa + gửi lại (transition)
+  REJECTED --> SUBMITTED: Gửi lại trực tiếp
+
+  APPROVED --> [*]
+
+  note right of ChainApproval
+    Mỗi level: role cấu hình trong approval_chains
+    ADMIN/CEO bypass mọi level
+    Duyệt tắt →APPROVED bị 422 khi chain > 1 level
+  end note

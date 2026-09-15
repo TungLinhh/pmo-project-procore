@@ -1,0 +1,33 @@
+{
+  "name": "pmo-backend",
+  "version": "0.3.0",
+  "type": "module",
+  "private": true,
+  "description": "PMO Backend — Express + PostgreSQL, 24 routers, 3 lib helpers",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "init-db": "node src/db/init.js",
+    "lint": "node --check src/index.js && for f in src/lib/*.js src/routes/*.js; do node --check \"$f\" || exit 1; done",
+    "test": "node ../../tests/e2e/api.mjs",
+    "test:api": "node ../../tests/e2e/api.mjs",
+    "test:payment": "node ../../tests/e2e/payment-sla.mjs",
+    "test:shop": "node ../../tests/e2e/shop-approval.mjs",
+    "test:schema": "node ../../tests/e2e/schema.mjs"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
+    "express": "^4.21.0",
+    "express-rate-limit": "^8.7.0",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^1.4.5-lts.1",
+    "pg": "^8.23.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
+  }
+}

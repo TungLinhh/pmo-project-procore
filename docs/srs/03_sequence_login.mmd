@@ -1,0 +1,32 @@
+sequenceDiagram
+  actor U as User
+  participant FE as Frontend (React)
+  participant API as Express API
+  participant DB as PostgreSQL
+
+  U->>FE: Nhập email + password
+  FE->>API: POST /api/auth/login {email, password}
+  API->>DB: SELECT * FROM users WHERE email = ?
+  DB-->>API: User row (or null)
+  alt User không tồn tại / sai password
+    API->>API: bcrypt.compare(password, password_hash)
+    API-->>FE: 401 "Invalid credentials"
+    FE-->>U: "Email hoặc mật khẩu sai"
+  else Password đúng
+    API->>API: Sign access JWT (24h) + opaque refresh (30d)
+    API->>DB: INSERT auth_refresh_tokens (token_hash, expires_at)
+    API-->>FE: 200 {token, refresh_token, user}
+    FE->>FE: localStorage pmo_token + pmo_refresh + pmo_user
+    alt role === 'site'
+      FE->>U: Navigate to /field
+    else
+      FE->>U: Navigate to /hq
+    end
+  end
+
+  note over FE,API: Hết hạn access → FE tự POST /auth/refresh (xoay vòng,<br/>single-use) → tiếp tục không đăng nhập lại
+
+  U->>FE: Logout
+  FE->>API: POST /api/auth/logout
+  API->>DB: Revoke refresh + deny access jti
+  FE->>FE: Xóa token, về /login

@@ -1,0 +1,71 @@
+# PMO demo stack — PostgreSQL + backend (single-port 3000)
+# Usage: docker compose up
+#   - First run: init profile applies migrations + seeds, then exits 0.
+#   - Subsequent runs: init is idempotent (skips if tenants table exists).
+#   - After init, the app service starts normally.
+#
+# One-command demo from a fresh clone + .env file:
+#   docker compose up --build
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pmo_user
+      POSTGRES_PASSWORD: pmo_dev_pwd
+      POSTGRES_DB: pmo
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pmo_user -d pmo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # One-shot init: runs init-db against the compose DB, then exits.
+  # Depends on healthy postgres. Idempotent — safe to re-run.
+  init:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: pmo
+      DB_USER: pmo_user
+      DB_PASSWORD: pmo_dev_pwd
+    entrypoint: ["node", "backend/src/db/init.js"]
+    # No restart: this is a one-shot job, not a service.
+    # compose up runs it once; on subsequent runs it exits 0 quickly.
+
+  app:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: pmo
+      DB_USER: pmo_user
+      DB_PASSWORD: pmo_dev_pwd
+      UPLOADS_DIR: /app/backend/uploads
+      # JWT_SECRET: set a strong secret in production (dev default otherwise)
+    ports:
+      - "3000:3000"
+    volumes:
+      - uploads:/app/backend/uploads
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  uploads:

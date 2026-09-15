@@ -1,0 +1,46 @@
+flowchart TD
+  Start([User mở Upload Wizard]) --> S0[Step 0: Upload]
+  S0 --> S0Q{Có file<br/>hợp lệ?}
+  S0Q -->|Không| S0E[Hiện thông báo<br/>lỗi upload]
+  S0E --> S0
+  S0Q -->|Có| S0U[POST /api/upload]
+  S0U --> S0R{Trùng SHA-256?}
+  S0R -->|Có| S0I[Thông báo 'File đã<br/>upload trước đó']
+  S0I --> Step1[Step 1: Cấu hình]
+  S0R -->|Không| Step1
+
+  Step1 --> S1P[Chọn Project]
+  S1P --> S1PN{Project mới?}
+  S1PN -->|Có| S1PC[POST /api/projects]
+  S1PC --> S1P
+  S1PN -->|Không| S1Z[Chọn Zone]
+  S1Z --> S1ZN{Zone mới?}
+  S1ZN -->|Có| S1ZC[POST /api/projects/:id/zones]
+  S1ZC --> S1Z
+  S1ZN -->|Không| S1D[Chọn Doc Type]
+  S1PC & S1Z & S1D --> S1V{Có đủ<br/>project+doc_type?}
+
+  S1V -->|Không| S1VD[Disable nút 'Xem trước']
+  S1VD --> S1P
+  S1V -->|Có| S1Config[POST /api/upload/:id/configure]
+  S1Config --> S1Backend[Backend parse file<br/>+ cache report_json]
+  S1Backend --> Step2[Step 2: Xem trước]
+
+  Step2 --> S2View[Hiển thị bảng<br/>3 rows mẫu/sheet]
+  S2View --> S2Q{Người dùng<br/>hài lòng?}
+  S2Q -->|Không, muốn sửa| S1P
+  S2Q -->|Có, xác nhận| S2Commit[POST /api/upload/:id/commit]
+  S2Commit --> S2OK{Commit thành công?}
+  S2OK -->|Không| S2Err[Hiện toast error<br/>'Commit lỗi']
+  S2Err --> S2Q
+  S2OK -->|Có| Step3[Step 3: Hoàn tất]
+
+  Step3 --> S3R[Hiển thị 'Insert thành công'<br/>+ stats: ok rows, errors]
+  S3R --> S3Close[User click 'Đóng']
+  S3Close --> End([Wizard đóng])
+
+  style Start fill:#90EE90
+  style End fill:#FFB6C1
+  style S0E fill:#FFB6C1
+  style S0I fill:#FFE4B5
+  style S2Err fill:#FFB6C1

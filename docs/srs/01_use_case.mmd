@@ -1,0 +1,48 @@
+graph TB
+  subgraph Actors
+    A1((Admin/PMO IT))
+    A2((PMO Staff))
+    A3((CEO))
+    A4((Project Manager))
+    A5((Site Engineer))
+    A6((Procurement))
+    A7((Accounting))
+  end
+
+  subgraph HQ_Module ["HQ Module"]
+    UC1["Quản lý Project"]
+    UC2["Quản lý Zone"]
+    UC3["Upload Excel Wizard"]
+    UC4["Xem Dashboard 4 trụ cột"]
+    UC5["Quản lý Shop Drawing"]
+    UC6["Quản lý Material"]
+    UC7["Quản lý Payment"]
+    UC8["Quản lý Issue"]
+    UC9["Gửi Directive"]
+    UC10["Xem Audit Log"]
+    UC11["Quản lý Master Data"]
+    UC12["Phê duyệt Approval"]
+  end
+
+  subgraph Field_Module ["Field PWA Module"]
+    UC13["Daily Progress"]
+    UC14["WBS Selection"]
+    UC15["Offline Sync"]
+    UC16["Upload ảnh"]
+    UC17["Review & Submit"]
+  end
+
+  subgraph System
+    SYS(["PMO System"])
+  end
+
+  A1 --> UC1 & UC2 & UC3 & UC4 & UC5 & UC6 & UC7 & UC8 & UC9 & UC10 & UC11 & UC12
+  A2 --> UC1 & UC2 & UC3 & UC4 & UC5 & UC6 & UC7 & UC8 & UC9 & UC10 & UC11
+  A3 --> UC4 & UC8 & UC9 & UC10
+  A4 --> UC1 & UC2 & UC4 & UC5 & UC6
+  A5 --> UC13 & UC14 & UC15 & UC16 & UC17
+  A6 --> UC6 & UC7 & UC11
+  A7 --> UC7 & UC12
+
+  UC1 & UC2 & UC3 & UC4 & UC5 & UC6 & UC7 & UC8 & UC9 & UC10 & UC11 & UC12 --> SYS
+  UC13 & UC14 & UC15 & UC16 & UC17 --> SYS

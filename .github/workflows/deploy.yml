@@ -1,0 +1,57 @@
+name: Deploy to production
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # Ephemeral CI database (data discarded): literal dev password like
+          # ci.yml. Do NOT wire secrets.PG_PASSWORD here — the repo has no such
+          # secret and an empty password kills the container (then init.js dies
+          # with ECONNREFUSED, masking the real cause).
+          POSTGRES_USER: pmo_user
+          POSTGRES_PASSWORD: pmo_dev_pwd
+          POSTGRES_DB: pmo
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U pmo_user -d pmo"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5432/pmo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Single root install ON PURPOSE: this repo uses npm workspaces, so
+      # `cd backend && npm ci` / `cd frontend && npm ci` each REPLACE the
+      # whole root node_modules with that member's lockfile tree (the second
+      # one wiped `pg` and broke Apply migrations). One root `npm ci` installs
+      # the full tree (backend prod + frontend build tools) from the root lock.
+      - name: Install deps
+        run: npm ci
+      - name: Verify backend deps resolve
+        run: node -e "import('pg').then(() => console.log('pg ok'))"
+      - name: Wait for Postgres
+        run: |
+          node -e "import('pg').then(async ({default:{Pool}}) => { const p = new Pool({ connectionString: process.env.DATABASE_URL }); for (let i = 0; i < 60; i++) { try { await p.query('SELECT 1'); console.log('pg ready'); await p.end(); process.exit(0); } catch (e) { await new Promise(r => setTimeout(r, 1000)); } } console.error('pg not ready'); process.exit(1); })"
+      - name: Build frontend
+        run: npm run build --workspace=frontend
+      - name: Apply migrations
+        run: node backend/src/db/init.js
+      # NOTE: no production server is provisioned yet (no DEPLOY_HOST/USER/KEY
+      # secrets), so this workflow currently verifies build + migrations only.
+      # When a server exists, re-add an SSH restart step here. Do NOT gate it
+      # with `if: ${{ secrets... }}` — secrets are not allowed in `if`
+      # conditions (that broke every deploy run with a workflow-file error).
