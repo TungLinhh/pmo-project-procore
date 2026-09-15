@@ -1,6 +1,6 @@
 # PMO MVP — Product Technical Documentation
 
-> **Version**: 0.6.1 · **Last updated**: 2026-09-15 · **Audience**: Engineers, technical PMs, integrators
+> **Version**: 0.7.0 · **Last updated**: 2026-09-15 · **Audience**: Engineers, technical PMs, integrators
 >
 > This document is the **single source of truth** for the PMO MVP. It replaces the previous collection of scattered docs (ARCHITECTURE, CODEBASE, USER_GUIDE, OPERATIONS, etc.). UML diagrams referenced from `docs/srs/`.
 
@@ -277,6 +277,7 @@ Located in `backend/drizzle/`, applied **exactly once** via the `schema_migratio
 | `9999d_schedule_links.sql` | `schedule_links` (FS/SS/FF dependency graph) + RLS (rank 5) |
 | `9999e_schedule_scenarios.sql` | `schedule_scenarios` preview/apply/rollback ledger (rank 6) |
 | `9999f_site_holidays.sql` | `site_holidays` (global VN 2026–27 + per-tenant) + RLS (rank 7) |
+| `9999g_ai_foundation.sql` | AI routing/index/calls/drafts tables + RLS + `tenants.ai_monthly_cap_usd` (rank 8; needs `vector` ext — see §3.5) |
 | `9991_project_members.sql` | Membership seam (HBG-only backfill) |
 | `9992_auth_session.sql` | Refresh tokens + denylist |
 | `9993_auth_password.sql` | `password_hash` (bcrypt) |
@@ -311,6 +312,12 @@ Sequences are resynced once at boot (`init.js`); inserts are single round-trip (
 - **Pilot tenant**: `PILOT` (plan small) provisioned via
   `backend/scripts/provision-tenant.mjs`; HBG (enterprise) is the frozen
   template. Guard: `tests/e2e/cross-tenant-guard.mjs` (30 checks).
+
+### 3.5 pgvector + the superuser lesson (v0.7.0)
+
+- Semantic search needs the `vector` extension (pgvector 0.8.6, built from source against PG16; compose uses `pgvector/pgvector:pg16`).
+- `migrate.js` runs `CREATE EXTENSION IF NOT EXISTS vector` first; missing + uninstallable → loud remediation error, never half-boot.
+- **Hard lesson, locked in**: `ALTER USER ... SUPERUSER` (done once to install the extension) **silently disabled ALL RLS** — superusers bypass even `FORCE` policies. Caught by `cross-tenant-guard` (3 RLS checks went red). Fix: extension pre-installed into `template1` (inherited by every fresh/scratch DB), app role back to non-superuser, one-time DBA step documented here. Never grant the app role superuser again — Wave 2 replaces it with a dedicated least-privilege role instead.
 
 ---
 
@@ -749,11 +756,28 @@ links (schedule_links, auto-chain bootstrap per zone ordinal)
 - **Status flow**: `OPEN → IN_PROGRESS → RESOLVED → CLOSED`
 
 ### 7.7 Daily Report (field)
-
 - `POST /api/projects/:id/daily-reports` (header: date, weather_am/pm)
 - `POST /api/daily-reports/:id/manpower { role_code, headcount }` (add multiple)
 - `POST /api/daily-reports/:id/photos` (multipart, ≤20 files)
 - Counters auto-incremented (`work_items_count`, `manpower_count`, etc.)
+
+### 7.8 AI assistant (v0.7.0, Enterprise `ai-assistant`)
+
+Provider-switchable semantic search + SLA watcher, human-in-the-loop throughout.
+
+```
+provider routing (ai_provider_configs: purpose × provider/model/key-env/priority)
+  → chat/embed adapters (openai|anthropic|google, native fetch, AI_MOCK=1 shim)
+  → pgvector index (ai_embeddings, HNSW, per-model rows, backfill job)
+  → permission-first retrieval (tenant + membership BEFORE top-k)
+  → ask (cited Vietnamese answers, no-data honesty) | watcher → ai_drafts → approve
+```
+
+- Keys in env only (`OPENAI_API_KEY` etc.); DB stores env var names; missing key → 503 naming it.
+- Chat/embed routed independently (Anthropic has no embeddings → 400 at config).
+- Every call logged (`ai_calls` + monthly cap, default $20, 429 on breach).
+- Mock adapter is semantic-preserving (hashed bag-of-words), so CI ranking tests mean something.
+- Non-goals v1: keyword fallback, auto-send, per-ERP agents.
 
 ---
 
@@ -1332,6 +1356,7 @@ docker compose restart backend
 | 2026-09-15 | Multi-tenant v0.5.0 | Tenant plans (Small/Mid/Enterprise) + entitlements, Postgres RLS + GUC plumbing, explicit membership, default-deny permissions, PILOT tenant, cross-tenant-guard, lean 4-pillar gating (hide-not-delete) | (this commit) |
 | 2026-09-15 | Compression v0.6.0 | FS/SS/FF schedule_links + auto-chain, pure CPM engine, Enterprise-gated preview/apply/rollback scenarios, ProgressDetail panel, cpm/links/compress suites | (this commit) |
 | 2026-09-15 | Wave 1 quick wins v0.6.1 | Suspension gaps, site_holidays auto-merge, summary-row exclusion, login rate limiting + LOGIN_FAILED audit | (this commit) |
+| 2026-09-15 | AI layer v0.7.0 | pgvector (source-built) + template1 provisioning, switchable providers (env keys + DB routing), semantic index + scoped retrieval, assistant panel + SLA watcher drafts, cost caps, ai-assistant suite | (this commit) |
 
 ### 16.1 Known limitations (v0.5.0)
 

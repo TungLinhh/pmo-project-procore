@@ -18,6 +18,8 @@ const MENU = [
     { to: '/hq/manpower', label: 'Manpower', icon: ICON.manpower },
     { to: '/hq/payment', label: 'Payment', icon: ICON.payment },
     { to: '/hq/issues', label: 'Issues', icon: ICON.issues },
+    // Enterprise-only: AI assistant (v0.7.0).
+    { to: '/hq/assistant', label: 'Trợ lý AI', icon: ICON.search, flag: 'ai-assistant' },
   ]},
   { group: 'Quản trị', items: [
     { to: '/hq/uploads', label: 'Uploads', icon: ICON.upload },
@@ -28,6 +30,8 @@ const MENU = [
     { to: '/hq/approval-chains', label: 'Cấu hình duyệt', icon: ICON.check, flag: 'chains' },
     // Enterprise-only: audit CSV/JSON export. In-app timeline stays everywhere.
     { to: '/hq/audit', label: 'Audit Log', icon: ICON.audit, flag: 'audit-export' },
+    // Enterprise-only: AI provider routing (admin/CEO; backend enforces role too).
+    { to: '/hq/ai-config', label: 'Cấu hình AI', icon: ICON.settings, flag: 'ai-assistant' },
   ]},
 ];
 

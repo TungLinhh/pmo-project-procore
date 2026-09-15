@@ -9,7 +9,9 @@
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector image (v0.7.0 AI layer needs the `vector` extension for semantic
+    # search; POSTGRES_USER is superuser here so init.js can CREATE EXTENSION).
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: pmo_user
       POSTGRES_PASSWORD: pmo_dev_pwd

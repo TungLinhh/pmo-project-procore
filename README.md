@@ -79,6 +79,7 @@ Tenant pilot (gói Small, để kiểm chứng đa tenant): **`admin@pilot.test`
 | P3 vật tư + submittal | ✅ cơ bản | ✅ + SLA 7d / TVGS 3d | ✅ |
 | P4 AP 4-step (hợp đồng → invoice → PR → chi) | ✅ (không AR) | ✅ + đọc AR | ✅ + AR full |
 | Nén tiến độ (Enterprise) | — | — | ✅ preview → apply → rollback |
+| Trợ lý AI (Enterprise) | — | — | ✅ hỏi đáp trích dẫn + đề xuất SLA |
 | Issues / directives | ✅ issues | ✅ + directives | ✅ |
 | Portfolio, audit export, bulk Excel, KPI targets | — | portfolio đọc | ✅ |
 

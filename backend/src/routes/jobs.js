@@ -130,12 +130,31 @@ router.get('/escalate-tvgs/status', async (req, res) => {
   res.json({ last_run: _lastRun, last_result: _lastResult });
 });
 
+// AI SLA watcher (v0.7.0): overdue submittals → LLM drafts (human approves).
+// Same hourly cadence as TVGS; drafts never auto-send.
+router.post('/ai-sla-watch', requireRole('admin', 'ceo'), async (req, res) => {
+  const { runAiSlaWatch } = await import('../lib/ai/watcher.js');
+  res.json(await runAiSlaWatch());
+});
+
+router.get('/ai-sla-watch/status', async (req, res) => {
+  const { aiWatchStatus } = await import('../lib/ai/watcher.js');
+  res.json(aiWatchStatus());
+});
+
 // Auto-run every hour
 if (process.env.NODE_ENV !== 'test') {
   setInterval(() => {
     runTvgsEscalation().catch(e => console.error('[escalate-tvgs cron]', e.message));
   }, 3600000);
   console.log('[cron] TVGS escalation scheduled every 1h');
+  setInterval(async () => {
+    try {
+      const { runAiSlaWatch } = await import('../lib/ai/watcher.js');
+      await runAiSlaWatch();
+    } catch (e) { console.error('[ai-sla-watch cron]', e.message); }
+  }, 3600000);
+  console.log('[cron] AI SLA watcher scheduled every 1h');
 }
 
 export default router;

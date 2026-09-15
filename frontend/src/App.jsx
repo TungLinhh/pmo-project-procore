@@ -17,6 +17,7 @@ import ShopList from './hq/ShopList.jsx';
 import Materials from './hq/Materials.jsx';
 import Manpower from './hq/Manpower.jsx';
 import Payment from './hq/Payment.jsx';
+import Assistant from './hq/Assistant.jsx';
 import OTDPage from './hq/OTDPage.jsx';
 import OTDPage_css from './hq/OTDPage.css?inline';
 import { ICON } from './icons.jsx';
@@ -27,6 +28,7 @@ import DailyReportForm_css from './components/DailyReportForm.css?inline';
 import { FieldMaterial, FieldManpower, FieldIssue, FieldReview, FieldSync, ProjectWbsSelection } from './field/FieldStubs.jsx';
 import MasterDataList from './governance/MasterDataList.jsx';
 import MasterDataEdit from './governance/MasterDataEdit.jsx';
+import AiConfig from './governance/AiConfig.jsx';
 import Approval from './governance/Approval.jsx';
 import ChainConfig from './governance/ChainConfig.jsx';
 import AuditLog from './governance/AuditLog.jsx';
@@ -97,6 +99,8 @@ export default function App() {
           <Route path="master-data/edit" element={<MasterDataEdit />} />
           <Route path="approval" element={<Approval />} />
           <Route path="approval-chains" element={<ChainConfig />} />
+          <Route path="assistant" element={<Assistant />} />
+          <Route path="ai-config" element={<AiConfig />} />
           <Route path="audit" element={<AuditLog />} />
           <Route path="otd" element={<OTDPage />} />
         </Route>

@@ -13,7 +13,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 export function orderedMigrationFiles(files) {
-  const rank = (f) => (f === '9999_add_issues_table.sql' ? 1 : f === '9998_align_schema_with_routes.sql' ? 2 : f === '9999b_tenant_rls.sql' ? 3 : f === '9999c_fix_rls_hatch.sql' ? 4 : f === '9999d_schedule_links.sql' ? 5 : f === '9999e_schedule_scenarios.sql' ? 6 : f === '9999f_site_holidays.sql' ? 7 : 0);
+  const rank = (f) => (f === '9999_add_issues_table.sql' ? 1 : f === '9998_align_schema_with_routes.sql' ? 2 : f === '9999b_tenant_rls.sql' ? 3 : f === '9999c_fix_rls_hatch.sql' ? 4 : f === '9999d_schedule_links.sql' ? 5 : f === '9999e_schedule_scenarios.sql' ? 6 : f === '9999f_site_holidays.sql' ? 7 : f === '9999g_ai_foundation.sql' ? 8 : 0);
   return [...files].sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
@@ -22,6 +22,23 @@ export function checksumOf(content) {
 }
 
 export async function runMigrations(db, drizzleDir) {
+  // pgvector (v0.7.0 AI layer) must exist before any migration referencing the
+  // `vector` type. Installing an UNTRUSTED extension needs a superuser, so this
+  // only ever succeeds for superusers (compose bootstrap, DBA shells) or on
+  // databases inheriting template1 (which carries vector since the v0.7.0
+  // provisioning). Everyone else gets a loud remediation error — never a
+  // half-vector schema. Note: superusers BYPASS RLS even under FORCE, so the
+  // app role must stay NON-superuser or all tenant isolation silently dies.
+  try {
+    await db.exec(`CREATE EXTENSION IF NOT EXISTS vector`);
+  } catch (e) {
+    const has = await db.prepare(`SELECT 1 FROM pg_extension WHERE extname = 'vector'`).getAsync().catch(() => null);
+    if (!has) {
+      throw new Error(
+        `pgvector extension missing and cannot install (needs superuser): install the pgvector package, then as a superuser run CREATE EXTENSION vector on this database (or into template1 for fresh DBs). Original: ${e.message}`
+      );
+    }
+  }
   await db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     filename TEXT PRIMARY KEY,
     checksum TEXT NOT NULL,

@@ -43,6 +43,8 @@ import adminRouter from './routes/admin.js';
 import scheduleLinksRouter from './routes/schedule-links.js';
 import scheduleCompressRouter from './routes/schedule-compress.js';
 import holidaysRouter from './routes/holidays.js';
+import aiRouter from './routes/ai.js';
+import aiAssistantRouter from './routes/ai-assistant.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -93,6 +95,8 @@ app.use('/api/admin', adminRouter);                     // user list + departmen
 app.use('/api', scheduleLinksRouter);                   // schedule dependency links (v0.6.0)
 app.use('/api', scheduleCompressRouter);                // compression preview/apply/rollback (v0.6.0)
 app.use('/api', holidaysRouter);                        // site holidays global+tenant (v0.6.1)
+app.use('/api/ai', aiRouter);                               // AI config + usage (v0.7.0)
+app.use('/api/ai', aiAssistantRouter);                      // AI ask + drafts (v0.7.0)
 app.use('/api/upload', uploadRouter);
 app.use('/api/upload', batchRouter); // POST /api/upload/batch (zip intake)
 app.use('/api/upload', classifyRouter); // POST /api/upload/classify (+alias GET /review)
