@@ -1,6 +1,6 @@
 # PMO MVP — Product Technical Documentation
 
-> **Version**: 0.5.0 · **Last updated**: 2026-09-15 · **Audience**: Engineers, technical PMs, integrators
+> **Version**: 0.6.0 · **Last updated**: 2026-09-15 · **Audience**: Engineers, technical PMs, integrators
 >
 > This document is the **single source of truth** for the PMO MVP. It replaces the previous collection of scattered docs (ARCHITECTURE, CODEBASE, USER_GUIDE, OPERATIONS, etc.). UML diagrams referenced from `docs/srs/`.
 
@@ -274,6 +274,8 @@ Located in `backend/drizzle/`, applied **exactly once** via the `schema_migratio
 | `0005_tenant_plans.sql` | `tenants.plan` (small/mid/enterprise) + `feature_flags` + `status`; HBG → enterprise |
 | `9999b_tenant_rls.sql` | RLS `*_tenant_isolation` policies on all tenant/project-scoped tables (runs after every table exists) |
 | `9999c_fix_rls_hatch.sql` | `app_tenant_unset()` / `app_current_tenant()` helpers; recreates all RLS policies coalesce-safe (generated, do not hand-edit) |
+| `9999d_schedule_links.sql` | `schedule_links` (FS/SS/FF dependency graph) + RLS (rank 5) |
+| `9999e_schedule_scenarios.sql` | `schedule_scenarios` preview/apply/rollback ledger (rank 6) |
 | `9991_project_members.sql` | Membership seam (HBG-only backfill) |
 | `9992_auth_session.sql` | Refresh tokens + denylist |
 | `9993_auth_password.sql` | `password_hash` (bcrypt) |
@@ -720,13 +722,31 @@ CONTRACT (vendor agreement, amount, retention_pct)
 
 **Threshold (UI color)**: ≥90% green, ≥70% yellow, <70% red.
 
-### 7.5 Issues + Directives
+### 7.5 Schedule compression (v0.6.0, Enterprise `schedule-compress`)
+
+The Procore gap: preview → apply → rollback over an FS/SS/FF link graph.
+
+```
+links (schedule_links, auto-chain bootstrap per zone ordinal)
+  → CPM forward/backward (lib/cpm.js, pure, day-indexed from TODAY)
+  → crash critical path round-robin vs floors (max(min_days_floor, ceil(d·min_pct), elapsed))
+  → preview diff (per-item old→new + calendar dates, bottleneck with 🔒 flags)
+  → apply (recomputes live, writes plan dates, snapshots before-values + audit)
+  → rollback (restores byte-identical dates)
+```
+
+- Locked (DONE/progress=1) items are anchors, never shortened; started items keep elapsed days + real start; pending never starts in the past.
+- Infeasible answers always name blockers (at-floor criticals, locked tails, late-clamped).
+- Learned on BTE: a 297-day locked summary row dominates the span — summary rows should be excluded/split before compressing real work.
+- Non-goals v1: working calendar (all days working), resource leveling, cost optimization.
+
+### 7.6 Issues + Directives
 
 - **Issue**: created with `severity` (NORMAL/HIGH/CRITICAL), `owner_user_id`
 - **Directive**: CEO/PMO can attach a directive to an issue, which notifies specific users (`notify_to_user_ids[]`)
 - **Status flow**: `OPEN → IN_PROGRESS → RESOLVED → CLOSED`
 
-### 7.6 Daily Report (field)
+### 7.7 Daily Report (field)
 
 - `POST /api/projects/:id/daily-reports` (header: date, weather_am/pm)
 - `POST /api/daily-reports/:id/manpower { role_code, headcount }` (add multiple)
@@ -1308,6 +1328,7 @@ docker compose restart backend
 | 2026-09-11 | P3–P5 + Wave 2 | Pool/ledger/sequences/txAudit/transitions; departments + chains; storage/sync-apply/money-proof; cleanup | (this commit) |
 | 2026-09-12 | Docs v0.4.0 | README (VI), PTD v0.4.0, SRS refresh, pipeline-guard, LAWRENCE removal | (this commit) |
 | 2026-09-15 | Multi-tenant v0.5.0 | Tenant plans (Small/Mid/Enterprise) + entitlements, Postgres RLS + GUC plumbing, explicit membership, default-deny permissions, PILOT tenant, cross-tenant-guard, lean 4-pillar gating (hide-not-delete) | (this commit) |
+| 2026-09-15 | Compression v0.6.0 | FS/SS/FF schedule_links + auto-chain, pure CPM engine, Enterprise-gated preview/apply/rollback scenarios, ProgressDetail panel, cpm/links/compress suites | (this commit) |
 
 ### 16.1 Known limitations (v0.5.0)
 

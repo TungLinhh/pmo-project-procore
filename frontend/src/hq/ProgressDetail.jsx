@@ -7,6 +7,7 @@ import { toast } from '../components/Toast.jsx';
 import { ICON } from '../icons.jsx';
 import { HEALTH } from '../constants.js';
 import ProjectPicker from '../components/ProjectPicker.jsx';
+import CompressPanel from '../components/CompressPanel.jsx';
 
 export default function ProgressDetail() {
   const [params] = useSearchParams();
@@ -20,6 +21,7 @@ export default function ProgressDetail() {
   const [zone, setZone] = useState(initialZone);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0); // bump to refetch (e.g. after compression apply)
   const [drill, setDrill] = useState(null); // schedule item open in drill-down
   const [drillFile, setDrillFile] = useState(null); // source upload row
   const [issueDraft, setIssueDraft] = useState(null); // prefilled issue from drill-down
@@ -37,7 +39,7 @@ export default function ProgressDetail() {
     setLoading(true);
     construction.schedule(selectedProject, { zone, search: search || undefined, status: statusFilter || undefined })
       .then(items => { setItems(items); setLoading(false); });
-  }, [selectedProject, zone, search, statusFilter]);
+  }, [selectedProject, zone, search, statusFilter, reloadTick]);
 
   function healthOf(item) {
     const pct = item.progress_pct || 0;
@@ -168,6 +170,8 @@ export default function ProgressDetail() {
         <div className="stat"><div className="label">Behind</div><div className="value" style={{ color: 'var(--c-behind)' }}>{behind}</div></div>
         <div className="stat"><div className="label">Completion</div><div className="value">{total > 0 ? Math.round(done / total * 100) : 0}%</div></div>
       </div>
+
+      <CompressPanel projectId={selectedProject} onApplied={() => setReloadTick(t => t + 1)} />
 
       <div className="data-table">
         <div className="data-table-header">

@@ -22,6 +22,9 @@ const DIRECT = [
   'audit_log', 'file_uploads', 'business_processes', 'issues', 'directives',
 ];
 // Tables scoped via projects(project_id).
+// NOTE: schedule_links is NOT regenerated here — it shipped with its own policy
+// inside 9999d_schedule_links.sql (regenerating 9999c now would break its ledger
+// checksum). If you add tables, generate a NEW migration from this spec.
 const VIA_PROJECT = [
   'zones', 'construction_schedule_items', 'shop_drawings', 'materials',
   'material_submittals', 'contracts', 'payments', 'daily_reports', 'ar_contracts',

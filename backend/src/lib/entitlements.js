@@ -44,6 +44,7 @@ const ENTERPRISE_ADD = [
   'bulk-import',     // zip/folder intake (200MB)
   'kpi-targets',     // KPI target editing UI
   'ar-full',         // AR full + retention/VAT
+  'schedule-compress', // CPM compression preview/apply/rollback (v0.6.0)
 ];
 
 const PLAN_FEATURES = {

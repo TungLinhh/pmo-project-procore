@@ -28,6 +28,13 @@ const ROUTE_MODULE_MAP = [
   { method: 'GET', pattern: /^\/api\/projects\/\d+\/otd/, module: 'schedule', action: 'read' },
   { method: 'GET', pattern: /^\/api\/projects\/\d+\/schedule-baselines/, module: 'schedule', action: 'read' },
   { method: 'POST', pattern: /^\/api\/projects\/\d+\/schedule-baselines/, module: 'schedule', action: 'write' },
+  { method: 'GET', pattern: /^\/api\/projects\/\d+\/schedule-links/, module: 'schedule', action: 'read' },
+  { method: 'POST', pattern: /^\/api\/projects\/\d+\/schedule-links/, module: 'schedule', action: 'write' },
+  { method: 'DELETE', pattern: /^\/api\/schedule-links\/\d+/, module: 'schedule', action: 'write' },
+  { method: 'POST', pattern: /^\/api\/projects\/\d+\/schedule-compress/, module: 'schedule', action: 'write' },
+  { method: 'GET', pattern: /^\/api\/projects\/\d+\/schedule-scenarios/, module: 'schedule', action: 'read' },
+  { method: 'GET', pattern: /^\/api\/schedule-scenarios\//, module: 'schedule', action: 'read' },
+  { method: 'POST', pattern: /^\/api\/schedule-scenarios\//, module: 'schedule', action: 'write' },
   // P2 shop (project-scoped list + direct CRUD/approve/history)
   { method: 'GET', pattern: /^\/api\/projects\/\d+\/shop-drawings/, module: 'shop', action: 'read' },
   { method: 'POST', pattern: /^\/api\/projects\/\d+\/shop-drawings/, module: 'shop', action: 'write' },

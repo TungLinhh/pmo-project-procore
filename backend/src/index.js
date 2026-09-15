@@ -40,6 +40,8 @@ import otdRouter from './routes/otd.js';
 import jobsRouter from './routes/jobs.js';
 import approvalChainsRouter from './routes/approval-chains.js';
 import adminRouter from './routes/admin.js';
+import scheduleLinksRouter from './routes/schedule-links.js';
+import scheduleCompressRouter from './routes/schedule-compress.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -87,6 +89,8 @@ app.use('/api/projects/:id/otd', otdRouter);                  // OTD KPI calcula
 app.use('/api/jobs', jobsRouter);                      // background jobs (TVGS escalation)
 app.use('/api/approval-chains', approvalChainsRouter);  // chain config (Wave 2)
 app.use('/api/admin', adminRouter);                     // user list + department assign
+app.use('/api', scheduleLinksRouter);                   // schedule dependency links (v0.6.0)
+app.use('/api', scheduleCompressRouter);                // compression preview/apply/rollback (v0.6.0)
 app.use('/api/upload', uploadRouter);
 app.use('/api/upload', batchRouter); // POST /api/upload/batch (zip intake)
 app.use('/api/upload', classifyRouter); // POST /api/upload/classify (+alias GET /review)

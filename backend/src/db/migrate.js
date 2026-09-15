@@ -5,13 +5,15 @@
 //   - not applied → apply + record (apply failure is never recorded)
 // New migration files are picked up automatically; explicit ordering only
 // where FKs demand it (9999 issues before 9998 directives; tenant RLS 9999b/c
-// AFTER every table exists — policies on missing tables fail fresh inits).
+// AFTER every table exists — policies on missing tables fail fresh inits;
+// 9999d schedule_links likewise needs construction_schedule_items + helpers;
+// 9999e scenarios needs schedule_links + the same).
 import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 export function orderedMigrationFiles(files) {
-  const rank = (f) => (f === '9999_add_issues_table.sql' ? 1 : f === '9998_align_schema_with_routes.sql' ? 2 : f === '9999b_tenant_rls.sql' ? 3 : f === '9999c_fix_rls_hatch.sql' ? 4 : 0);
+  const rank = (f) => (f === '9999_add_issues_table.sql' ? 1 : f === '9998_align_schema_with_routes.sql' ? 2 : f === '9999b_tenant_rls.sql' ? 3 : f === '9999c_fix_rls_hatch.sql' ? 4 : f === '9999d_schedule_links.sql' ? 5 : f === '9999e_schedule_scenarios.sql' ? 6 : 0);
   return [...files].sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
