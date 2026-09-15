@@ -35,6 +35,8 @@ const ROUTE_MODULE_MAP = [
   { method: 'GET', pattern: /^\/api\/projects\/\d+\/schedule-scenarios/, module: 'schedule', action: 'read' },
   { method: 'GET', pattern: /^\/api\/schedule-scenarios\//, module: 'schedule', action: 'read' },
   { method: 'POST', pattern: /^\/api\/schedule-scenarios\//, module: 'schedule', action: 'write' },
+  { method: 'GET', pattern: /^\/api\/holidays/, module: 'schedule', action: 'read' },
+  { method: 'POST|DELETE', pattern: /^\/api\/holidays/, module: 'schedule', action: 'write' },
   // P2 shop (project-scoped list + direct CRUD/approve/history)
   { method: 'GET', pattern: /^\/api\/projects\/\d+\/shop-drawings/, module: 'shop', action: 'read' },
   { method: 'POST', pattern: /^\/api\/projects\/\d+\/shop-drawings/, module: 'shop', action: 'write' },

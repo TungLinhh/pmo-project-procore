@@ -1,6 +1,6 @@
 // CPM engine unit tests (v0.6.0 Phase 1). Pure lib, no server, no DB.
 // Run: node tests/e2e/cpm.mjs
-import { computeCpm, topoSort, findCycle, resolveDurationDays, dateDiffDays, rowDurationDays, compressSchedule, mapToCalendar } from '../../backend/src/lib/cpm.js';
+import { computeCpm, topoSort, findCycle, resolveDurationDays, dateDiffDays, rowDurationDays, compressSchedule, mapToCalendar, normalizeGaps, isSuspended, addWorkingDays, detectSummaryRows } from '../../backend/src/lib/cpm.js';
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
@@ -161,6 +161,35 @@ const I = (id, d) => ({ id, duration_days: d });
   const m = mapToCalendar(rows, { 1: 4, 2: 6 }, { 1: 0, 2: 2 }, '2026-09-01', '2026-09-10');
   ok(m[1].new_start === '2026-09-10' && m[1].new_end === '2026-09-14', `pending clamped to today (got ${m[1].new_start}→${m[1].new_end})`);
   ok(m[2].new_start === '2026-09-03' && m[2].new_end === '2026-09-09', `started keeps start (got ${m[2].new_start}→${m[2].new_end})`);
+}
+
+// 15. Suspensions: gaps pause the calendar, snap starts out of gaps.
+{
+  const gaps = normalizeGaps([{ from: '2026-09-12', to: '2026-09-14' }, { from: 'bad', to: 'x' }, null, { from: '2026-09-20', to: '2026-09-18' }]);
+  ok(gaps.length === 1 && gaps[0].from === '2026-09-12', `junk gaps filtered (got ${JSON.stringify(gaps)})`);
+  ok(isSuspended('2026-09-13', gaps) && !isSuspended('2026-09-15', gaps), 'isSuspended');
+  ok(addWorkingDays('2026-09-10', 2, gaps) === '2026-09-15', `2 working days skip gap (got ${addWorkingDays('2026-09-10', 2, gaps)})`);
+  ok(addWorkingDays('2026-09-13', 0, gaps) === '2026-09-15', 'n=0 snaps forward out of gap');
+  const rows = [{ id: 1, plan_start_date: '2026-09-10', actual_start_date: null, progress_pct: 0, status: 'PENDING' }];
+  const m = mapToCalendar(rows, { 1: 4 }, { 1: 0 }, '2026-09-10', '2026-09-10', gaps);
+  ok(m[1].new_start === '2026-09-10' && m[1].new_end === '2026-09-17', `duration spans gap (got ${m[1].new_start}→${m[1].new_end})`);
+}
+
+// 16. Summary detection: TỔNG-name or >3× median duration.
+{
+  const rows = [
+    { id: 1, name_vi: 'TỔNG TIẾN ĐỘ THI CÔNG', plan_duration_days: 297 },
+    { id: 2, name_vi: 'Ép cọc', plan_duration_days: 5 },
+    { id: 3, name_vi: 'Đài móng', plan_duration_days: 6 },
+    { id: 4, name_vi: 'Việc lạ kéo dài', plan_duration_days: 40 },
+    { id: 5, name_vi: 'Cột', plan_duration_days: 4 },
+  ];
+  const cands = detectSummaryRows(rows);
+  const byId = Object.fromEntries(cands.map((c) => [c.id, c.reason]));
+  ok(byId[1] === 'name', 'TỔNG row flagged by name');
+  ok(typeof byId[4] === 'string' && byId[4].startsWith('outlier'), `40d outlier flagged (got ${byId[4]})`);
+  ok(!(2 in byId) && !(3 in byId) && !(5 in byId), 'normal rows clean');
+  ok(detectSummaryRows([]).length === 0, 'empty → none');
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');

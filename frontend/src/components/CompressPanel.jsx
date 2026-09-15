@@ -17,10 +17,17 @@ export default function CompressPanel({ projectId, onApplied }) {
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
   const [understood, setUnderstood] = useState(false);
+  // Suspensions (site shutdown spans) + excluded summary-row ids, sent as policy.
+  const [gaps, setGaps] = useState([]);
+  const [gapFrom, setGapFrom] = useState('');
+  const [gapTo, setGapTo] = useState('');
+  const [excluded, setExcluded] = useState([]);
 
   useEffect(() => {
     setPreview(null);
     setUnderstood(false);
+    setGaps([]);
+    setExcluded([]);
     if (!projectId) return;
     fetch('/api/me/entitlements', { headers: { Authorization: `Bearer ${getToken()}` } })
       .then(r => r.json()).then(j => setCanCompress(Array.isArray(j?.features) && j.features.includes('schedule-compress')))
@@ -49,15 +56,26 @@ export default function CompressPanel({ projectId, onApplied }) {
     } catch (e) { toast.error('Auto-chain thất bại: ' + e.message); } finally { setBusy(false); }
   }
 
-  async function runPreview() {
+  async function runPreview(extraPolicy = {}) {
     if (!target) { toast.error('Chọn ngày mục tiêu trước'); return; }
     setBusy(true);
     try {
-      const r = await fetch(`/api/projects/${projectId}/schedule-compress/preview`, { method: 'POST', headers: authH(), body: JSON.stringify({ target_end_date: target }) }).then(r => r.json());
+      const r = await fetch(`/api/projects/${projectId}/schedule-compress/preview`, {
+        method: 'POST', headers: authH(),
+        body: JSON.stringify({ target_end_date: target, policy: { suspensions: gaps, exclude_ids: excluded, ...extraPolicy } }),
+      }).then(r => r.json());
       if (r.error) throw new Error(r.error);
       setPreview(r);
       setUnderstood(false);
+      if (Array.isArray(r.excluded_ids)) setExcluded(r.excluded_ids);
     } catch (e) { toast.error('Preview thất bại: ' + e.message); } finally { setBusy(false); }
+  }
+
+  async function excludeAndPreview() {
+    const ids = (preview?.summary_candidates || []).map(c => c.id);
+    if (!ids.length) return;
+    setExcluded(ids);
+    await runPreview({ exclude_ids: ids });
   }
 
   async function applyScenario() {
@@ -96,16 +114,52 @@ export default function CompressPanel({ projectId, onApplied }) {
         )}
       </div>
       {canCompress && (
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
+        <>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
           <label style={{ fontSize: 12 }}>Mục tiêu xong trước</label>
           <input type="date" value={target} onChange={e => setTarget(e.target.value)} style={{ padding: 6 }} />
-          <button className="btn btn-secondary" onClick={runPreview} disabled={busy || !target}>
+          <button className="btn btn-secondary" onClick={() => runPreview()} disabled={busy || !target}>
             <ICON.eye size={12} />Xem trước
           </button>
         </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
+          <label style={{ fontSize: 12 }}>Nghỉ thi công (từ → đến)</label>
+          <input type="date" value={gapFrom} onChange={e => setGapFrom(e.target.value)} style={{ padding: 6 }} />
+          <input type="date" value={gapTo} onChange={e => setGapTo(e.target.value)} style={{ padding: 6 }} />
+          <button className="btn btn-secondary" disabled={busy || !gapFrom || !gapTo || gapFrom > gapTo}
+            onClick={() => { setGaps(g => [...g, { from: gapFrom, to: gapTo }]); setGapFrom(''); setGapTo(''); }}>
+            + Thêm
+          </button>
+          {gaps.map((g, i) => (
+            <span key={i} className="badge" style={{ fontSize: 11 }}>
+              {g.from}→{g.to}
+              <button onClick={() => setGaps(gaps.filter((_, j) => j !== i))} style={{ marginLeft: 4, cursor: 'pointer', border: 0, background: 'transparent' }} title="Xóa">×</button>
+            </span>
+          ))}
+          {excluded.length > 0 && (
+            <span className="badge" style={{ fontSize: 11 }}>
+              Loại {excluded.length} dòng tổng hợp
+              <button onClick={() => { setExcluded([]); }} style={{ marginLeft: 4, cursor: 'pointer', border: 0, background: 'transparent' }} title="Bỏ loại trừ">×</button>
+            </span>
+          )}
+        </div>
+        </>
       )}
       {canCompress && preview && (
         <div>
+          {(preview.holidays_applied?.length > 0 || preview.suspensions_applied?.length > 0) && (
+            <div style={{ fontSize: 12, color: 'var(--c-text-2)', marginBottom: 8 }}>
+              Lịch nghỉ áp dụng: {[...(preview.holidays_applied || []), ...(preview.suspensions_applied || []).map(g => `${g.from}→${g.to}`)].join(', ')}
+            </div>
+          )}
+          {(preview.summary_candidates?.length > 0) && (
+            <div className="empty" style={{ marginBottom: 8 }}>
+              Phát hiện {preview.summary_candidates.length} dòng tổng hợp ({preview.summary_candidates.map(c => c.name).join(', ')}) — nên loại khỏi tính toán.
+              <button className="btn btn-secondary" style={{ marginLeft: 8 }} onClick={excludeAndPreview} disabled={busy}>
+                Loại trừ &amp; xem lại
+              </button>
+            </div>
+          )}
           <div className="stat-strip" style={{ marginBottom: 8 }}>
             <div className="stat"><div className="label">Trước</div><div className="value">{preview.before_days}d</div></div>
             <div className="stat"><div className="label">Sau</div><div className="value" style={{ color: 'var(--c-on-track)' }}>{preview.after_days}d</div></div>

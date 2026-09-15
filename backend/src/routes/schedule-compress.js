@@ -12,7 +12,7 @@ import { requireProjectAccess, checkProjectAccess } from '../lib/project-access.
 import { requireFeature } from '../lib/entitlements.js';
 import { getDb } from '../db/index.js';
 import { withAudit } from '../lib/with-audit.js';
-import { computeCpm, compressSchedule, mapToCalendar, rowDurationDays, dateDiffDays } from '../lib/cpm.js';
+import { computeCpm, compressSchedule, mapToCalendar, rowDurationDays, dateDiffDays, normalizeGaps, detectSummaryRows } from '../lib/cpm.js';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -60,14 +60,35 @@ function toEngineItems(rows) {
 // (Anchoring at min plan_start let ancient 2019 rows inflate the day-index
 // scale into meaninglessness.) Started/locked items keep their real starts;
 // pending items never start in the past (clamped in mapToCalendar).
-function runCompression(rows, links, targetEnd, policy) {
-  const items = toEngineItems(rows);
+// Holidays (global + own tenant) overlapping the window auto-merge as gaps.
+async function runCompression(db, tenantId, rows, links, targetEnd, policy) {
+  const excluded = new Set((policy.exclude_ids || []).filter(Number.isInteger));
+  const live = rows.filter((r) => !excluded.has(r.id));
+  const liveLinks = links.filter((l) => !excluded.has(l.predecessor_id) && !excluded.has(l.successor_id));
+  const items = toEngineItems(live);
   const anchor = todayStr();
   const targetDays = dateDiffDays(anchor, targetEnd);
   if (targetDays == null) throw Object.assign(new Error('target_end_date must be YYYY-MM-DD'), { status: 400 });
-  const comp = compressSchedule(items, links, targetDays, policy);
-  const final = computeCpm(items.map((i) => ({ id: i.id, duration_days: comp.durations[i.id] ?? i.duration_days })), links);
-  const cal = mapToCalendar(rows, comp.durations, final.es, anchor, todayStr());
+  const comp = compressSchedule(items, liveLinks, targetDays, policy);
+  const final = computeCpm(items.map((i) => ({ id: i.id, duration_days: comp.durations[i.id] ?? i.duration_days })), liveLinks);
+  const asStr = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10));
+  const hols = await db.prepare(
+    `SELECT holiday_date AS d FROM site_holidays
+     WHERE (tenant_id IS NULL OR tenant_id = ?) AND holiday_date BETWEEN ? AND ?`
+  ).allAsync(tenantId, anchor, targetEnd).catch(() => []);
+  const gaps = normalizeGaps([
+    ...(policy.suspensions || []),
+    ...hols.map((h) => ({ from: asStr(h.d), to: asStr(h.d) })),
+  ]);
+  const holidayDates = new Set(hols.map((h) => asStr(h.d)));
+  const cal = mapToCalendar(live, comp.durations, final.es, anchor, todayStr(), gaps);
+  // Excluded rows pass through untouched (never moved, never shortened).
+  for (const r of rows) {
+    if (excluded.has(r.id)) {
+      const s = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v ?? '').slice(0, 10));
+      cal[r.id] = { new_start: s(r.plan_start_date), new_end: s(r.plan_end_date) };
+    }
+  }
   const calEnd = Object.values(cal).map((c) => c.new_end).sort().pop();
   const names = new Map(rows.map((r) => [r.id, r.name_vi]));
   let feasible = comp.feasible && calEnd <= targetEnd;
@@ -96,6 +117,10 @@ function runCompression(rows, links, targetEnd, policy) {
     bottleneck,
     critical: final.critical,
     durations: comp.durations, cal, rounds: comp.rounds,
+    suspensions_applied: gaps.filter((g) => g.from <= calEnd),
+    holidays_applied: [...holidayDates].filter((d) => d <= calEnd).sort(),
+    summary_candidates: detectSummaryRows(rows),
+    excluded_ids: [...excluded],
   };
 }
 
@@ -110,10 +135,27 @@ router.post('/projects/:id/schedule-compress/preview', ...ENTERPRISE, async (req
     min_days_floor: Number.isFinite(policy.min_days_floor) ? Math.max(0, Math.floor(policy.min_days_floor)) : 1,
     min_pct: Number.isFinite(policy.min_pct) ? Math.min(1, Math.max(0, policy.min_pct)) : 0.5,
   };
+  if (policy.suspensions !== undefined) {
+    if (!Array.isArray(policy.suspensions) || policy.suspensions.length > 10) {
+      return res.status(400).json({ error: 'suspensions must be an array of ≤10 {from,to} (YYYY-MM-DD)' });
+    }
+    for (const g of policy.suspensions) {
+      if (!g || !/^\d{4}-\d{2}-\d{2}$/.test(g.from || '') || !/^\d{4}-\d{2}-\d{2}$/.test(g.to || '') || g.from > g.to) {
+        return res.status(400).json({ error: 'each suspension needs {from,to} YYYY-MM-DD with from ≤ to' });
+      }
+    }
+    cleanPolicy.suspensions = policy.suspensions.map((g) => ({ from: g.from.slice(0, 10), to: g.to.slice(0, 10) }));
+  }
+  if (policy.exclude_ids !== undefined) {
+    if (!Array.isArray(policy.exclude_ids) || policy.exclude_ids.length > 500 || !policy.exclude_ids.every(Number.isInteger)) {
+      return res.status(400).json({ error: 'exclude_ids must be an array of ≤500 integer item ids' });
+    }
+    cleanPolicy.exclude_ids = [...new Set(policy.exclude_ids)];
+  }
   try {
     const { rows, links } = await loadSchedule(req.params.id);
     if (!rows.length) return res.status(422).json({ error: 'project has no schedule items' });
-    const out = runCompression(rows, links, target_end_date, cleanPolicy);
+    const out = await runCompression(db, req.user.tenant_id, rows, links, target_end_date, cleanPolicy);
     const ins = await withAudit(req, {
       action: 'PREVIEW', resourceType: 'schedule_scenario', resourceId: 0,
       context: { project_id: Number(req.params.id) },
@@ -145,7 +187,7 @@ router.post('/schedule-scenarios/:id/apply', ...ENTERPRISE, async (req, res) => 
     const { rows, links } = await loadSchedule(sc.project_id);
     const policy = sc.policy || {};
     const target = asDateStr(sc.target_end_date);
-    const out = runCompression(rows, links, target, policy);
+    const out = await runCompression(db, req.user.tenant_id, rows, links, target, policy);
     if (!out.feasible) {
       return res.status(422).json({ error: `infeasible on current data (calendar end ${out.calendar_end} > target)`, bottleneck: out.bottleneck, scenario_id: sc.id });
     }

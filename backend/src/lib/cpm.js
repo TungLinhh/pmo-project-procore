@@ -222,27 +222,88 @@ export function compressSchedule(items, links, targetDays, policy = {}) {
   }
 }
 
+// --- Summary-row detection (v0.6.1) ---
+// Header/summary rows ("TỔNG TIẾN ĐỘ...") carry huge spans that dominate the
+// project duration but represent no real work. They poison compression
+// (see BTE: one 297-day locked summary). Detected by name pattern or duration
+// outlier (>3× project median). Exclusion is explicit (policy.exclude_ids) —
+// never automatic.
+export function detectSummaryRows(rows) {
+  const durs = rows.map((r) => ({ r, d: rowDurationDays(r) })).filter((x) => x.d > 0);
+  const sorted = durs.map((x) => x.d).sort((a, b) => a - b);
+  const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+  const out = [];
+  for (const { r, d } of durs) {
+    const name = String(r.name_vi || '');
+    if (/TỔNG|TONG|SUMMARY|TOTAL|CỘNG/i.test(name)) out.push({ id: r.id, name: r.name_vi, reason: 'name' });
+    else if (median > 0 && d > 3 * median) out.push({ id: r.id, name: r.name_vi, reason: `outlier (${d}d > 3× median ${median}d)` });
+  }
+  return out;
+}
+
+// --- Working calendar + suspensions (v0.6.1) ---
+// gaps: [{ from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }] inclusive suspension spans
+// (Tết shutdowns, site suspensions). No work starts/ends inside a gap:
+// addWorkingDays jumps over them. Invalid spans are ignored (fail-open on
+// display math only — the API validates strictly before storing policy).
+export function normalizeGaps(gaps) {
+  if (!Array.isArray(gaps)) return [];
+  const out = [];
+  for (const g of gaps.slice(0, 10)) {
+    if (!g || typeof g.from !== 'string' || typeof g.to !== 'string') continue;
+    const f = g.from.slice(0, 10), t = g.to.slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(f) || !/^\d{4}-\d{2}-\d{2}$/.test(t) || f > t) continue;
+    out.push({ from: f, to: t });
+  }
+  return out.sort((a, b) => (a.from < b.from ? -1 : 1));
+}
+
+export function isSuspended(dateStr, gaps) {
+  const d = dateStr.slice(0, 10);
+  return gaps.some((g) => d >= g.from && d <= g.to);
+}
+
+// Add n working (non-suspended) days to a date. n=0 snaps FORWARD out of a gap.
+export function addWorkingDays(dateStr, n, gaps = []) {
+  let d = dateStr.slice(0, 10);
+  if (n <= 0) {
+    while (isSuspended(d, gaps)) d = shiftDate(d, 1);
+    return d;
+  }
+  let left = n;
+  while (left > 0) {
+    d = shiftDate(d, 1);
+    if (!isSuspended(d, gaps)) left--;
+  }
+  return d;
+}
+
+function shiftDate(dateStr, n) {
+  const d = new Date(dateStr.slice(0, 10) + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
 // Map compressed durations back to calendar dates (pure).
 //   rows: DB items {id, plan_start_date, actual_start_date, progress_pct, status}
 //   es: day-index early starts from the FINAL cpm run
 //   anchor: 'YYYY-MM-DD' project day-0 (min plan_start or today)
 // Rules: locked/started keep their real start (actual || plan || anchor+es);
 // pending start = max(anchor+es, today) — never schedule pending work in the past.
-export function mapToCalendar(rows, durations, es, anchor, todayStr) {
+ export function mapToCalendar(rows, durations, es, anchor, todayStr, gaps = []) {
+  const G = normalizeGaps(gaps);
   const ds = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10));
-  const addDays = (dateStr, n) => {
-    const d = new Date(ds(dateStr) + 'T00:00:00Z');
-    d.setUTCDate(d.getUTCDate() + n);
-    return d.toISOString().slice(0, 10);
-  };
   const out = {};
   for (const r of rows) {
     const started = (r.progress_pct ?? 0) > 0 || r.actual_start_date != null;
     const locked = (r.progress_pct ?? 0) >= 1 || r.status === 'DONE';
     let start;
-    if (locked || started) start = ds(r.actual_start_date || r.plan_start_date || addDays(anchor, es[r.id] ?? 0));
-    else start = addDays(anchor, es[r.id] ?? 0) < todayStr ? todayStr : addDays(anchor, es[r.id] ?? 0);
-    out[r.id] = { new_start: start, new_end: addDays(start, durations[r.id] ?? rowDurationDays(r)) };
+    if (locked || started) start = addWorkingDays(ds(r.actual_start_date || r.plan_start_date || anchor), 0, G);
+    else {
+      const cand = addWorkingDays(ds(anchor), es[r.id] ?? 0, G);
+      start = cand < todayStr ? addWorkingDays(todayStr, 0, G) : cand;
+    }
+    out[r.id] = { new_start: start, new_end: addWorkingDays(start, durations[r.id] ?? rowDurationDays(r), G) };
   }
   return out;
 }

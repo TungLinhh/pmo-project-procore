@@ -1,6 +1,6 @@
 # PMO MVP — Product Technical Documentation
 
-> **Version**: 0.6.0 · **Last updated**: 2026-09-15 · **Audience**: Engineers, technical PMs, integrators
+> **Version**: 0.6.1 · **Last updated**: 2026-09-15 · **Audience**: Engineers, technical PMs, integrators
 >
 > This document is the **single source of truth** for the PMO MVP. It replaces the previous collection of scattered docs (ARCHITECTURE, CODEBASE, USER_GUIDE, OPERATIONS, etc.). UML diagrams referenced from `docs/srs/`.
 
@@ -276,6 +276,7 @@ Located in `backend/drizzle/`, applied **exactly once** via the `schema_migratio
 | `9999c_fix_rls_hatch.sql` | `app_tenant_unset()` / `app_current_tenant()` helpers; recreates all RLS policies coalesce-safe (generated, do not hand-edit) |
 | `9999d_schedule_links.sql` | `schedule_links` (FS/SS/FF dependency graph) + RLS (rank 5) |
 | `9999e_schedule_scenarios.sql` | `schedule_scenarios` preview/apply/rollback ledger (rank 6) |
+| `9999f_site_holidays.sql` | `site_holidays` (global VN 2026–27 + per-tenant) + RLS (rank 7) |
 | `9991_project_members.sql` | Membership seam (HBG-only backfill) |
 | `9992_auth_session.sql` | Refresh tokens + denylist |
 | `9993_auth_password.sql` | `password_hash` (bcrypt) |
@@ -736,6 +737,7 @@ links (schedule_links, auto-chain bootstrap per zone ordinal)
 ```
 
 - Locked (DONE/progress=1) items are anchors, never shortened; started items keep elapsed days + real start; pending never starts in the past.
+- **v0.6.1 additions**: suspension gaps (`policy.suspensions`, Tết-style shutdowns shift successors — Original kept, Delta shown); `site_holidays` auto-merge (global VN + tenant rows, `/api/holidays` CRUD); summary-row detection (`TỔNG`-name or >3× median, explicit `exclude_ids`, pass-through untouched); login rate limiting (10/min/IP, 429 VI message, `LOGIN_FAILED` audit).
 - Infeasible answers always name blockers (at-floor criticals, locked tails, late-clamped).
 - Learned on BTE: a 297-day locked summary row dominates the span — summary rows should be excluded/split before compressing real work.
 - Non-goals v1: working calendar (all days working), resource leveling, cost optimization.
@@ -1329,6 +1331,7 @@ docker compose restart backend
 | 2026-09-12 | Docs v0.4.0 | README (VI), PTD v0.4.0, SRS refresh, pipeline-guard, LAWRENCE removal | (this commit) |
 | 2026-09-15 | Multi-tenant v0.5.0 | Tenant plans (Small/Mid/Enterprise) + entitlements, Postgres RLS + GUC plumbing, explicit membership, default-deny permissions, PILOT tenant, cross-tenant-guard, lean 4-pillar gating (hide-not-delete) | (this commit) |
 | 2026-09-15 | Compression v0.6.0 | FS/SS/FF schedule_links + auto-chain, pure CPM engine, Enterprise-gated preview/apply/rollback scenarios, ProgressDetail panel, cpm/links/compress suites | (this commit) |
+| 2026-09-15 | Wave 1 quick wins v0.6.1 | Suspension gaps, site_holidays auto-merge, summary-row exclusion, login rate limiting + LOGIN_FAILED audit | (this commit) |
 
 ### 16.1 Known limitations (v0.5.0)
 

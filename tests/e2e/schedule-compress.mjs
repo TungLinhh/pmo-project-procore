@@ -83,6 +83,34 @@ try {
   // 7. Infeasible preview: target yesterday → 201 with feasible:false + bottleneck.
   const inf = await call(adminT, 'POST', `/api/projects/${scratchPid}/schedule-compress/preview`, { target_end_date: todayPlus(-1) });
   ok(inf.s === 201 && inf.j.feasible === false && inf.j.bottleneck.length > 0 && inf.j.bottleneck.every((b) => b.id && b.locked === false), `infeasible honest (got ${inf.s}/${inf.j?.feasible})`);
+
+  // 8. Holidays: globals listed, own CRUD, global delete 404s.
+  const h0 = await call(adminT, 'GET', '/api/holidays');
+  ok(h0.s === 200 && h0.j.some((h) => h.scope === 'global'), `holiday list has globals (got ${h0.s}/${h0.j?.length})`);
+  const h1 = await call(adminT, 'POST', '/api/holidays', { holiday_date: '2027-05-19', name: 'Sinh nhật Bác (test)' });
+  ok(h1.s === 201, `create own holiday (got ${h1.s})`);
+  const h1b = await call(adminT, 'POST', '/api/holidays', { holiday_date: '2027-05-19', name: 'dup' });
+  ok(h1b.s === 409, `duplicate holiday → 409 (got ${h1b.s})`);
+  const h1c = await call(adminT, 'POST', '/api/holidays', { holiday_date: '19-05-2027', name: 'bad' });
+  ok(h1c.s === 400, `bad date → 400 (got ${h1c.s})`);
+  const globalId = h0.j.find((h) => h.scope === 'global').id;
+  const h2 = await call(adminT, 'DELETE', `/api/holidays/${globalId}`);
+  ok(h2.s === 404, `global delete → 404 (got ${h2.s})`);
+  const h3 = await call(adminT, 'DELETE', `/api/holidays/${h1.j.id}`);
+  ok(h3.s === 200, `delete own holiday (got ${h3.s})`);
+
+  // 9. Summary exclusion: 100d TỔNG row dominates until excluded.
+  await db.prepare(
+    `INSERT INTO construction_schedule_items (project_id, zone_id, source_sheet, ordinal, name_vi, progress_pct, status, plan_start_date, plan_end_date)
+     VALUES (?, ?, 'CMP', 9, 'TỔNG TEST', 0, 'PENDING', CURRENT_DATE, CURRENT_DATE + 100)`
+  ).runAsync(scratchPid, zid);
+  const sumRow = await db.prepare(`SELECT id FROM construction_schedule_items WHERE project_id = ? AND ordinal = 9`).getAsync(scratchPid);
+  const pv9 = await call(adminT, 'POST', `/api/projects/${scratchPid}/schedule-compress/preview`, { target_end_date: todayPlus(30) });
+  ok(pv9.s === 201 && (pv9.j.summary_candidates || []).some((c) => c.id === sumRow.id), 'summary candidate detected');
+  const pv9x = await call(adminT, 'POST', `/api/projects/${scratchPid}/schedule-compress/preview`, { target_end_date: todayPlus(30), policy: { exclude_ids: [sumRow.id] } });
+  ok(pv9x.s === 201 && (pv9x.j.excluded_ids || []).includes(sumRow.id) && !(pv9x.j.per_item || []).some((p) => p.id === sumRow.id), 'excluded row untouched by compression');
+  const pv9bad = await call(adminT, 'POST', `/api/projects/${scratchPid}/schedule-compress/preview`, { target_end_date: todayPlus(30), policy: { exclude_ids: 'nope' } });
+  ok(pv9bad.s === 400, `bad exclude_ids → 400 (got ${pv9bad.s})`);
 } finally {
   if (scratchPid) {
     const { getDb } = await import('../../backend/src/db/index.js');

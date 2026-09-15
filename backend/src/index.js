@@ -42,6 +42,7 @@ import approvalChainsRouter from './routes/approval-chains.js';
 import adminRouter from './routes/admin.js';
 import scheduleLinksRouter from './routes/schedule-links.js';
 import scheduleCompressRouter from './routes/schedule-compress.js';
+import holidaysRouter from './routes/holidays.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -91,6 +92,7 @@ app.use('/api/approval-chains', approvalChainsRouter);  // chain config (Wave 2)
 app.use('/api/admin', adminRouter);                     // user list + department assign
 app.use('/api', scheduleLinksRouter);                   // schedule dependency links (v0.6.0)
 app.use('/api', scheduleCompressRouter);                // compression preview/apply/rollback (v0.6.0)
+app.use('/api', holidaysRouter);                        // site holidays global+tenant (v0.6.1)
 app.use('/api/upload', uploadRouter);
 app.use('/api/upload', batchRouter); // POST /api/upload/batch (zip intake)
 app.use('/api/upload', classifyRouter); // POST /api/upload/classify (+alias GET /review)

@@ -6,12 +6,13 @@ import {
   revokeRefresh, revokeAccess, revokeAllSessions, destroySession,
 } from '../lib/auth.js';
 import { getDb } from '../db/index.js';
+import { loginLimiter, refreshLimiter } from '../lib/rate-limit.js';
 
 const router = Router({ mergeParams: true });
 
 const publicUser = (u) => ({ id: u.id, email: u.email, full_name: u.name, role: u.role, is_ceo: !!u.is_ceo, tenant_id: u.tenant_id });
 
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   const db = getDb();
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: 'email + password required' });
@@ -21,7 +22,14 @@ router.post('/login', async (req, res) => {
   const okPass = user.password_hash
     ? await bcrypt.compare(password, user.password_hash)
     : false;
-  if (!okPass) return res.status(401).json({ error: 'Sai email hoặc mật khẩu' });
+  if (!okPass) {
+    // Failed attempt is auditable (same tx not needed — login has no session yet).
+    await db.prepare(
+      `INSERT INTO audit_log (tenant_id, user_id, user_name, action, resource_type, context, actor_role, note)
+       VALUES (?, ?, ?, 'LOGIN_FAILED', 'user', ?, ?, 'Sai mật khẩu')`
+    ).runAsync(user.tenant_id, user.id, user.name, JSON.stringify({ email }), user.role).catch(() => {});
+    return res.status(401).json({ error: 'Sai email hoặc mật khẩu' });
+  }
   const token = issueAccess(user);
   const refresh_token = await createRefreshToken(user.id);
   res.json({ token, refresh_token, user: publicUser(user) });
@@ -29,7 +37,7 @@ router.post('/login', async (req, res) => {
 
 // Single-use refresh rotation. Old refresh dies even if the response is lost
 // (client must persist the newest pair) — standard rotation semantics.
-router.post('/refresh', async (req, res) => {
+router.post('/refresh', refreshLimiter, async (req, res) => {
   const { refresh_token } = req.body || {};
   const rotated = await rotateRefresh(refresh_token);
   if (!rotated) return res.status(401).json({ error: 'Refresh token invalid or expired' });
