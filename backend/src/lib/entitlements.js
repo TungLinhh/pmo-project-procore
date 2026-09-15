@@ -46,6 +46,8 @@ const ENTERPRISE_ADD = [
   'ar-full',         // AR full + retention/VAT
   'schedule-compress', // CPM compression preview/apply/rollback (v0.6.0)
   'ai-assistant',    // AI search + drafts + config (v0.7.0)
+  'bim-library',     // BIM model library store-only v1 (v0.9.0)
+  'erp-export',      // AP ledger export + vendor import + SFTP push (v0.9.0)
 ];
 
 const PLAN_FEATURES = {

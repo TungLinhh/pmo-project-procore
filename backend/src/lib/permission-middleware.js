@@ -39,6 +39,12 @@ const ROUTE_MODULE_MAP = [
   { method: 'POST|DELETE', pattern: /^\/api\/holidays/, module: 'schedule', action: 'write' },
   { method: 'GET|PUT|POST', pattern: /^\/api\/ai\/(config|usage|test)/, module: 'master_data', action: 'read' },
   { method: 'GET|POST', pattern: /^\/api\/ai\/(ask|drafts|backfill)/, module: 'schedule', action: 'read' },
+  { method: 'GET', pattern: /^\/api\/projects\/\d+\/bim-models/, module: 'file_upload', action: 'read' },
+  { method: 'POST', pattern: /^\/api\/projects\/\d+\/bim\/models/, module: 'file_upload', action: 'write' },
+  { method: 'GET|POST', pattern: /^\/api\/bim\/models\//, module: 'file_upload', action: 'read' },
+  { method: 'GET', pattern: /^\/api\/export\//, module: 'payment', action: 'read' },
+  { method: 'GET|POST|DELETE', pattern: /^\/api\/erp\//, module: 'payment', action: 'read' },
+  { method: 'GET|POST', pattern: /^\/api\/jobs\/erp-push/, module: 'payment', action: 'read' },
   // P2 shop (project-scoped list + direct CRUD/approve/history)
   { method: 'GET', pattern: /^\/api\/projects\/\d+\/shop-drawings/, module: 'shop', action: 'read' },
   { method: 'POST', pattern: /^\/api\/projects\/\d+\/shop-drawings/, module: 'shop', action: 'write' },
@@ -110,7 +116,9 @@ export async function permissionMiddleware(req, res, next) {
   // NOTE: inside mounted routers req.path is STRIPPED of the mount prefix
   // (e.g. '/1/schedule' instead of '/api/projects/1/schedule'), while the
   // ROUTE_MODULE_MAP patterns expect full paths — always match baseUrl+path.
-  const fullPath = `${req.baseUrl || ''}${req.path || ''}`;
+  // Trailing slash normalized: a router-mounted '/' becomes '/api/projects/'
+  // which must match the same rules as '/api/projects'.
+  const fullPath = `${req.baseUrl || ''}${req.path || ''}`.replace(/\/+$/, '') || '/';
   // Skip non-API and public/self-service endpoints (never role-gated).
   if (!fullPath.startsWith('/api/')) return next();
   if (fullPath === '/api/health' || fullPath.startsWith('/api/auth/') || fullPath.startsWith('/api/me')) return next();

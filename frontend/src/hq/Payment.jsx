@@ -30,6 +30,14 @@ export default function Payment() {
   // AR (receivables) is Mid(read)/Enterprise(full) only — Small (AP-only) gets
   // 403 from the API; skip the fetch and hide the section (hide, not delete).
   const [canAR, setCanAR] = useState(true);
+  // ERP round-trip (v0.9.0, Enterprise 'erp-export'): ledger export, vendor
+  // CSV import with match suggestions, SFTP push per profile + push log.
+  const [canERP, setCanERP] = useState(false);
+  const [profiles, setProfiles] = useState([]);
+  const [pushProfile, setPushProfile] = useState('');
+  const [pushLog, setPushLog] = useState([]);
+  const [vendorSugs, setVendorSugs] = useState(null);
+  const [erpBusy, setErpBusy] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [addForm, setAddForm] = useState({ contract_id: '', invoice_id: '', request_no: '', amount: '', retention_amount: 0, due_date: '' });
   const [addBusy, setAddBusy] = useState(false);
@@ -69,6 +77,7 @@ export default function Payment() {
         const ent = await fetch('/api/me/entitlements', { headers: authH }).then(r => r.json()).catch(() => null);
         const okAR = Array.isArray(ent?.features) && (ent.features.includes('ar-read') || ent.features.includes('ar-full'));
         setCanAR(okAR);
+        setCanERP(Array.isArray(ent?.features) && ent.features.includes('erp-export'));
         if (okAR) {
           const [arcs, lines] = await Promise.all([
             fetch(`/api/projects/${selectedProject}/ar-contracts`, { headers: { Authorization: `Bearer ${getToken()}` } }).then(r => r.json()).catch(() => []),
@@ -334,8 +343,13 @@ export default function Payment() {
         Chưa có: retention release workflow, multi-level approver.
       </p>
 
-      {/* Add milestone modal */}
-      {showAddModal && (
+      {canERP && selectedProject && (
+        <ErpPanel projectId={selectedProject} profiles={profiles} setProfiles={setProfiles}
+          pushProfile={pushProfile} setPushProfile={setPushProfile} pushLog={pushLog} setPushLog={setPushLog}
+          vendorSugs={vendorSugs} setVendorSugs={setVendorSugs} erpBusy={erpBusy} setErpBusy={setErpBusy} />
+      )}
+
+      {/* Add milestone modal */}      {showAddModal && (
         <div className="modal-backdrop" onClick={() => !addBusy && setShowAddModal(false)}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 520 }}>
             <h3>Add Payment Request (Milestone)</h3>
@@ -377,6 +391,124 @@ export default function Payment() {
             </div>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ERP round-trip panel (v0.9.0): export CSV, vendor import suggestions,
+// SFTP push per profile + push log. Shown only with 'erp-export' (Enterprise).
+function ErpPanel({ projectId, profiles, setProfiles, pushProfile, setPushProfile, pushLog, setPushLog, vendorSugs, setVendorSugs, erpBusy, setErpBusy }) {
+  const authH = () => ({ Authorization: `Bearer ${getToken()}` });
+
+  useEffect(() => {
+    fetch('/api/erp/profiles', { headers: authH() }).then(r => r.json())
+      .then(d => { if (Array.isArray(d)) { setProfiles(d); if (d[0] && !pushProfile) setPushProfile(String(d[0].id)); } })
+      .catch(() => {});
+    fetch('/api/erp/push-log', { headers: authH() }).then(r => r.json())
+      .then(d => { if (Array.isArray(d)) setPushLog(d); })
+      .catch(() => {});
+  }, [projectId]); // eslint-disable-line
+
+  async function downloadCsv() {
+    try {
+      const r = await fetch(`/api/export/ap-ledger.csv?project_id=${projectId}`, { headers: authH() });
+      if (!r.ok) throw new Error('Xuất thất bại');
+      const blob = await r.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `ap-ledger-${projectId}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) { toast.error('Lỗi: ' + e.message); }
+  }
+
+  async function importVendors(e) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setErpBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', f);
+      const r = await fetch('/api/erp/vendors/import', { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body: fd }).then(r => r.json());
+      if (r.error) throw new Error(r.error);
+      setVendorSugs(r);
+    } catch (err) { toast.error('Import thất bại: ' + err.message); } finally { setErpBusy(false); e.target.value = ''; }
+  }
+
+  async function confirmVendor(s) {
+    if (!s.match || !window.confirm(`Gán MST ${s.tax_id} cho ${s.match.vendor_name}?`)) return;
+    try {
+      const r = await fetch('/api/erp/vendors/confirm', {
+        method: 'POST', headers: { ...authH(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vendor_id: s.match.vendor_id, tax_id: s.tax_id }),
+      }).then(r => r.json());
+      if (r.error) throw new Error(r.error);
+      toast.success(`Đã gán MST cho ${r.name}`);
+      setVendorSugs(v => ({ ...v, suggestions: (v?.suggestions || []).filter(x => x !== s) }));
+    } catch (e) { toast.error('Xác nhận thất bại: ' + e.message); }
+  }
+
+  async function pushNow() {
+    if (!pushProfile) { toast.error('Chưa có profile SFTP (tạo ở /hq/master-data? no — liên hệ admin)'); return; }
+    setErpBusy(true);
+    try {
+      const r = await fetch('/api/jobs/erp-push', {
+        method: 'POST', headers: { ...authH(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile_id: Number(pushProfile), project_id: Number(projectId) }),
+      }).then(r => r.json());
+      if (r.error) throw new Error(r.error);
+      toast.success(`Đã đẩy ${r.rows} dòng → ${r.remote_file}${r.mocked ? ' (mock)' : ''}`);
+      const log = await fetch('/api/erp/push-log', { headers: authH() }).then(r => r.json());
+      if (Array.isArray(log)) setPushLog(log);
+    } catch (e) { toast.error('Push thất bại: ' + e.message); } finally { setErpBusy(false); }
+  }
+
+  return (
+    <div className="section" style={{ marginTop: 16 }}>
+      <div className="section-title"><span>🔗 ERP round-trip</span></div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+        <button className="btn btn-secondary" onClick={downloadCsv}><ICON.download size={12} />Xuất AP ledger (CSV)</button>
+        <label className="btn btn-secondary" style={{ cursor: 'pointer' }}>
+          <ICON.upload size={12} />Nhập NCC (CSV)
+          <input type="file" accept=".csv" hidden onChange={importVendors} />
+        </label>
+        <select value={pushProfile} onChange={e => setPushProfile(e.target.value)} style={{ padding: 6 }}>
+          <option value="">— profile SFTP —</option>
+          {profiles.map(p => <option key={p.id} value={p.id}>{p.name} → {p.sftp_user}@{p.sftp_host}</option>)}
+        </select>
+        <button className="btn btn-secondary" onClick={pushNow} disabled={erpBusy || !pushProfile}>Đẩy SFTP</button>
+      </div>
+      {vendorSugs && (
+        <div className="data-table" style={{ marginBottom: 8 }}><div className="data-table-body"><table>
+          <thead><tr><th>NCC trong file</th><th>MST</th><th>Khớp trong hệ thống</th><th></th></tr></thead>
+          <tbody>
+            {vendorSugs.suggestions.map((s, i) => (
+              <tr key={i}>
+                <td>{s.name}</td>
+                <td><code>{s.tax_id || '—'}</code></td>
+                <td style={{ fontSize: 12 }}>{s.match ? `${s.match.vendor_name} (${s.match.similarity})` : <span style={{ color: 'var(--c-text-2)' }}>không khớp — tạo NCC mới ở Master Data</span>}</td>
+                <td>{s.match && s.tax_id ? <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => confirmVendor(s)}>Xác nhận MST</button> : null}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table></div></div>
+      )}
+      {pushLog.length > 0 && (
+        <div className="data-table"><div className="data-table-body"><table>
+          <thead><tr><th>Thời gian</th><th>Profile</th><th>File</th><th className="num">Bytes</th><th>Trạng thái</th></tr></thead>
+          <tbody>
+            {pushLog.slice(0, 5).map(l => (
+              <tr key={l.id}>
+                <td style={{ fontSize: 11 }}>{(l.created_at || '').slice(0, 16).replace('T', ' ')}</td>
+                <td>{l.profile_name || `#${l.profile_id}`}</td>
+                <td style={{ fontSize: 11, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.remote_file || '—'}</td>
+                <td className="num">{l.bytes}</td>
+                <td><span className={`badge workflow-${l.status === 'ok' ? 'APPROVED' : 'REJECTED'}`}>{l.status}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table></div></div>
       )}
     </div>
   );

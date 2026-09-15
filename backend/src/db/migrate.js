@@ -13,7 +13,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 export function orderedMigrationFiles(files) {
-  const rank = (f) => (f === '9999_add_issues_table.sql' ? 1 : f === '9998_align_schema_with_routes.sql' ? 2 : f === '9999b_tenant_rls.sql' ? 3 : f === '9999c_fix_rls_hatch.sql' ? 4 : f === '9999d_schedule_links.sql' ? 5 : f === '9999e_schedule_scenarios.sql' ? 6 : f === '9999f_site_holidays.sql' ? 7 : f === '9999g_ai_foundation.sql' ? 8 : f === '9999h_app_role.sql' ? 9 : f === '9999i_password_flag.sql' ? 10 : 0);
+  const rank = (f) => (f === '9999_add_issues_table.sql' ? 1 : f === '9998_align_schema_with_routes.sql' ? 2 : f === '9999b_tenant_rls.sql' ? 3 : f === '9999c_fix_rls_hatch.sql' ? 4 : f === '9999d_schedule_links.sql' ? 5 : f === '9999e_schedule_scenarios.sql' ? 6 : f === '9999f_site_holidays.sql' ? 7 : f === '9999g_ai_foundation.sql' ? 8 : f === '9999h_app_role.sql' ? 9 : f === '9999i_password_flag.sql' ? 10 : f === '9999j_erp_push.sql' ? 11 : 0);
   return [...files].sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
@@ -31,6 +31,7 @@ export async function runMigrations(db, drizzleDir) {
   // app role must stay NON-superuser or all tenant isolation silently dies.
   try {
     await db.exec(`CREATE EXTENSION IF NOT EXISTS vector`);
+    await db.exec(`CREATE EXTENSION IF NOT EXISTS pg_trgm`); // ERP vendor matching (trusted)
   } catch (e) {
     const has = await db.prepare(`SELECT 1 FROM pg_extension WHERE extname = 'vector'`).getAsync().catch(() => null);
     if (!has) {

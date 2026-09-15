@@ -20,6 +20,8 @@ const MENU = [
     { to: '/hq/issues', label: 'Issues', icon: ICON.issues },
     // Enterprise-only: AI assistant (v0.7.0).
     { to: '/hq/assistant', label: 'Trợ lý AI', icon: ICON.search, flag: 'ai-assistant' },
+    // Enterprise-only: BIM library store-only v1 (v0.9.0, chưa có viewer).
+    { to: '/hq/bim', label: 'Thư viện BIM', icon: ICON.database, flag: 'bim-library' },
   ]},
   { group: 'Quản trị', items: [
     { to: '/hq/uploads', label: 'Uploads', icon: ICON.upload },

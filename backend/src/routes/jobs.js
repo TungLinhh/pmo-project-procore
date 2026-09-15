@@ -142,6 +142,26 @@ router.get('/ai-sla-watch/status', async (req, res) => {
   res.json(aiWatchStatus());
 });
 
+// ERP SFTP push, manual (Wave 3 C2): {profile_id, project_id} → ledger CSV upload.
+// No auto-cron in v1 (accountants push on close schedule). Secrets from env.
+router.post('/erp-push', requireRole('admin', 'ceo', 'accounting'), async (req, res) => {
+  const { profile_id, project_id } = req.body || {};
+  if (!Number.isInteger(profile_id) || !Number.isInteger(project_id)) {
+    return res.status(400).json({ error: 'profile_id + project_id (ints) required' });
+  }
+  const { getEntitlements, hasFeature } = await import('../lib/entitlements.js');
+  const ent = await getEntitlements(req.user.tenant_id);
+  if (!hasFeature(ent, 'erp-export')) {
+    return res.status(403).json({ error: `Plan '${ent.plan}' lacks feature 'erp-export'` });
+  }
+  try {
+    const { pushLedger } = await import('../lib/erp-push.js');
+    res.json(await pushLedger({ tenantId: req.user.tenant_id, profileId: profile_id, projectId: project_id }));
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
 // Auto-run every hour
 if (process.env.NODE_ENV !== 'test') {
   setInterval(() => {

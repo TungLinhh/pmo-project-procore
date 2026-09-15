@@ -1,6 +1,6 @@
 # PMO MVP — Product Technical Documentation
 
-> **Version**: 0.8.0 · **Last updated**: 2026-09-15 · **Audience**: Engineers, technical PMs, integrators
+> **Version**: 0.9.0 · **Last updated**: 2026-09-15 · **Audience**: Engineers, technical PMs, integrators
 >
 > This document is the **single source of truth** for the PMO MVP. It replaces the previous collection of scattered docs (ARCHITECTURE, CODEBASE, USER_GUIDE, OPERATIONS, etc.). UML diagrams referenced from `docs/srs/`.
 
@@ -280,6 +280,7 @@ Located in `backend/drizzle/`, applied **exactly once** via the `schema_migratio
 | `9999g_ai_foundation.sql` | AI routing/index/calls/drafts tables + RLS + `tenants.ai_monthly_cap_usd` (rank 8; needs `vector` ext — see §3.5) |
 | `9999h_app_role.sql` | Least-privilege `pmo_app` role + grants + default privileges (rank 9; needs CREATEROLE once — see §3.6) |
 | `9999i_password_flag.sql` | `users.must_change_password` (rank 10) |
+| `9999j_erp_push.sql` | `erp_profiles` + `erp_push_log` + RLS (rank 11) |
 | `9991_project_members.sql` | Membership seam (HBG-only backfill) |
 | `9992_auth_session.sql` | Refresh tokens + denylist |
 | `9993_auth_password.sql` | `password_hash` (bcrypt) |
@@ -794,10 +795,15 @@ provider routing (ai_provider_configs: purpose × provider/model/key-env/priorit
 - Non-goals v1: keyword fallback, auto-send, per-ERP agents.
 
 ### 7.9 Field offline outbox (v0.8.0)
-
 - `POST /api/sync/enqueue {client_id, resource_type, server_record_id?, resource_json}` — validated against the SAME `SYNC_APPLIERS` allowlist as apply (never wider); idempotent replay by `(user_id, client_id)` (+ partial unique index, race-safe); existence checks deferred to flush.
 - Field `outbox.js`: localStorage queue (survives reload), auto-flush on reconnect with backoff, per-item status in `/field/sync` (+ manual retry, clear-dead). `DailyProgress` falls back to it on network failure (progress only — notes stay online-only).
 - Flush = existing resolve winners (explicit last-write-wins, audit `SYNC_APPLY`). Boundary: scalars only — no counters, money, or photo blobs.
+
+### 7.10 BIM library + ERP round-trip (v0.9.0, Enterprise `bim-library` / `erp-export`)
+
+- **BIM (store-only v1)**: `POST /api/projects/:id/bim/models` (`.ifc` ≤200MB, 2GB/project quota) → content-addressed stage + `IFCBUILDINGSTOREY`/`IFCSPACE`/schema extraction (streaming, capped, `report_json`) → zone link (explicit param, filename guess, or ranked suggestions — never auto-assign). `/hq/bim` library table; viewer column honestly says "coming".
+- **ERP**: `GET /api/export/ap-ledger.csv` (byte-stable 17 cols, BOM, tenant-scoped); vendor CSV import → pg_trgm suggestions (suggest-only, threshold 0.4) → `confirm` is the only write; `erp_profiles` (secret env name only) + manual `POST /api/jobs/erp-push` (3× retry, `erp_push_log`). No auto-cron, no per-ERP API clients in v1.
+- **Incidents fixed on the way**: project-list 403 for non-admin roles (baseUrl+path trailing slash vs exact skip — normalize in middleware; `project-list-roles.mjs` locks it); `/api/erp/*` vs `/api/export/*` mount-prefix mismatch (vendor routes moved to `erp.js`); undici `text()` strips BOM (assert raw bytes).
 
 ---
 
@@ -1378,6 +1384,7 @@ docker compose restart backend
 | 2026-09-15 | Wave 1 quick wins v0.6.1 | Suspension gaps, site_holidays auto-merge, summary-row exclusion, login rate limiting + LOGIN_FAILED audit | (this commit) |
 | 2026-09-15 | AI layer v0.7.0 | pgvector (source-built) + template1 provisioning, switchable providers (env keys + DB routing), semantic index + scoped retrieval, assistant panel + SLA watcher drafts, cost caps, ai-assistant suite | (this commit) |
 | 2026-09-15 | Wave 2 v0.8.0 | Least-privilege pmo_app + owner pool split, password rotation + login gate, offline enqueue + field outbox, db-role/password-rotation/field-offline suites | (this commit) |
+| 2026-09-15 | Wave 3 v0.9.0 | BIM store-only library (IFC metadata, zone linking) + ERP round-trip (AP CSV export, vendor match, SFTP push), bim-intake/erp-roundtrip/project-list-roles suites | (this commit) |
 
 ### 16.1 Known limitations (v0.8.0)
 

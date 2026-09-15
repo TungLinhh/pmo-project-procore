@@ -80,6 +80,8 @@ Tenant pilot (gói Small, để kiểm chứng đa tenant): **`admin@pilot.test`
 | P4 AP 4-step (hợp đồng → invoice → PR → chi) | ✅ (không AR) | ✅ + đọc AR | ✅ + AR full |
 | Nén tiến độ (Enterprise) | — | — | ✅ preview → apply → rollback |
 | Trợ lý AI (Enterprise) | — | — | ✅ hỏi đáp trích dẫn + đề xuất SLA |
+| Thư viện BIM (Enterprise) | — | — | ✅ lưu IFC + metadata (chưa viewer) |
+| ERP round-trip (Enterprise) | — | — | ✅ xuất AP CSV + đối soát NCC + đẩy SFTP |
 | Issues / directives | ✅ issues | ✅ + directives | ✅ |
 | Portfolio, audit export, bulk Excel, KPI targets | — | portfolio đọc | ✅ |
 

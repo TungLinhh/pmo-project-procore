@@ -45,6 +45,9 @@ import scheduleCompressRouter from './routes/schedule-compress.js';
 import holidaysRouter from './routes/holidays.js';
 import aiRouter from './routes/ai.js';
 import aiAssistantRouter from './routes/ai-assistant.js';
+import bimRouter from './routes/bim.js';
+import exportRouter from './routes/export.js';
+import erpRouter from './routes/erp.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -97,6 +100,9 @@ app.use('/api', scheduleCompressRouter);                // compression preview/a
 app.use('/api', holidaysRouter);                        // site holidays global+tenant (v0.6.1)
 app.use('/api/ai', aiRouter);                               // AI config + usage (v0.7.0)
 app.use('/api/ai', aiAssistantRouter);                      // AI ask + drafts (v0.7.0)
+app.use('/api', bimRouter);                                 // BIM library (v0.9.0)
+app.use('/api/export', exportRouter);                       // AP ledger export (v0.9.0)
+app.use('/api/erp', erpRouter);                             // ERP profiles + push log (v0.9.0)
 app.use('/api/upload', uploadRouter);
 app.use('/api/upload', batchRouter); // POST /api/upload/batch (zip intake)
 app.use('/api/upload', classifyRouter); // POST /api/upload/classify (+alias GET /review)
