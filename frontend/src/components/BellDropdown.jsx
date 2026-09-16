@@ -33,8 +33,13 @@ export default function BellDropdown() {
   const [filter, setFilter] = useState('all');
   const wrapRef = useRef(null);
   const nav = useNavigate();
+  // P1-8 overlap guard: SSE bursts + 30s poll can stack load() calls; skip
+  // while one is in flight instead of letting responses race.
+  const loadingRef = useRef(false);
 
   const load = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     try {
       const d = await api.notifications.list(filter === 'unread');
       // Normalize: backend trả array thẳng, derive counts
@@ -43,7 +48,7 @@ export default function BellDropdown() {
       const critical = items.filter(n => n.severity === 'critical' || n.severity === 'CRITICAL').length;
       const warning = items.filter(n => n.severity === 'warning' || n.severity === 'WARNING').length;
       setData({ items, counts: { total: items.length, unread, critical, warning } });
-    } catch (e) { /* swallow */ }
+    } catch (e) { /* swallow */ } finally { loadingRef.current = false; }
   }, [filter]);
 
   useEffect(() => {
@@ -64,6 +69,10 @@ export default function BellDropdown() {
         es.addEventListener('approval.decided', refresh);
         es.addEventListener('compression.applied', refresh);
         es.onmessage = refresh; // unnamed fallback
+        // Server recycles streams every 90s (dead-peer bound) — each clean
+        // reconnect must reset the failure count or we'd permanently drop to
+        // polling after ~4.5min of healthy cycling.
+        es.onopen = () => { failures = 0; };
         es.onerror = () => {
           failures++;
           if (failures >= 3 && es) { es.close(); es = null; }

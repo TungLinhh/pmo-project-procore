@@ -29,8 +29,17 @@ router.get('/', async (req, res, next) => {
   const beat = setInterval(() => {
     try { res.write(`:beat\n\n`); } catch {}
   }, 25000);
+  // P1-8 dead peers: req.on('close') never fires for connections parked
+  // behind proxies (Cloudflare tunnel), so vanished clients would pile up in
+  // the subscriber map forever. Bound every stream to a 90s lifetime — the
+  // client (EventSource) auto-reconnects transparently and re-handshakes.
+  const reap = setTimeout(() => {
+    try { res.end(); } catch {}
+    drop();
+  }, 90000);
   req.on('close', () => {
     clearInterval(beat);
+    clearTimeout(reap);
     drop();
   });
 });

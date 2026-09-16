@@ -188,17 +188,31 @@ router.post('/erp-push', requireRole('admin', 'ceo', 'accounting'), async (req, 
   }
 });
 
-// Auto-run every hour
+// Auto-run every hour.
+// Overlap guards (P1): a slow run must never stack with the next tick —
+// if the previous run is still in flight, skip + log instead of doubling
+// notifications. Timers are intentionally NOT unref'd and never cleared:
+// the backend is a long-lived server process and these crons are part of its
+// steady-state duties (clearing them on shutdown is handled by process exit).
+let _tvgsRunning = false;
+let _slaRunning = false;
 if (process.env.NODE_ENV !== 'test') {
   setInterval(() => {
-    runTvgsEscalation().catch(e => console.error('[escalate-tvgs cron]', e.message));
+    if (_tvgsRunning) { console.log('[cron] TVGS escalation skipped (previous run still in flight)'); return; }
+    _tvgsRunning = true;
+    runTvgsEscalation()
+      .catch(e => console.error('[escalate-tvgs cron]', e.message))
+      .finally(() => { _tvgsRunning = false; });
   }, 3600000);
   console.log('[cron] TVGS escalation scheduled every 1h');
   setInterval(async () => {
+    if (_slaRunning) { console.log('[cron] AI SLA watcher skipped (previous run still in flight)'); return; }
+    _slaRunning = true;
     try {
       const { runAiSlaWatch } = await import('../lib/ai/watcher.js');
       await runAiSlaWatch();
     } catch (e) { console.error('[ai-sla-watch cron]', e.message); }
+    finally { _slaRunning = false; }
   }, 3600000);
   console.log('[cron] AI SLA watcher scheduled every 1h');
 }

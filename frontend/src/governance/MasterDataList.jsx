@@ -4,6 +4,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { ICON } from '../icons.jsx';
 import { getToken, projects, masterData, preferDemoProject } from '../api/index.js';
 import { toast } from '../components/Toast.jsx';
+import HolidaysPanel from '../components/HolidaysPanel.jsx';
 import ProjectPicker from '../components/ProjectPicker.jsx';
 
 const RESOURCES = [
@@ -14,6 +15,8 @@ const RESOURCES = [
   { key: 'departments',    label: 'Departments',    icon: ICON.manpower, fetch: () => masterData.departments() },
   // KPI targets are per-project — picker below supplies the id (was hardcoded 1).
   { key: 'kpi-targets',    label: 'KPI Targets (43.10)', icon: ICON.bell, fetch: (pid) => projects.kpiTargets(pid), needsProject: true },
+  // Site holidays (P1): tenant CRUD + global read-only — custom panel, not MasterDataEdit.
+  { key: 'holidays',       label: 'Holidays',       icon: ICON.calendar,  custom: 'holidays' },
 ];
 
 export default function MasterDataList() {
@@ -33,7 +36,7 @@ export default function MasterDataList() {
     setLoading(true);
     try {
       const r = RESOURCES.find(x => x.key === resource);
-      if (!r) { setItems([]); return; }
+      if (!r || r.custom) { setItems([]); return; }
       if (r.needsProject && !kpiProject) { setItems([]); return; }
       const data = await r.fetch(kpiProject);
       setItems(Array.isArray(data) ? data : []);
@@ -59,10 +62,14 @@ export default function MasterDataList() {
           {resource === 'kpi-targets' && (
             <ProjectPicker value={kpiProject} onChange={setKpiProject} placeholder="Chọn dự án..." />
           )}
+          {resource !== 'holidays' && (
           <button className="btn" onClick={() => nav(`/hq/master-data/edit?r=${resource}`)}>
             <ICON.plus size={13} />Thêm mới
           </button>
+          )}
+          {resource !== 'holidays' && (
           <button className="btn btn-secondary" onClick={load}><ICON.refresh size={12} />Refresh</button>
+          )}
         </div>
       </div>
 
@@ -83,6 +90,7 @@ export default function MasterDataList() {
         })}
       </div>
 
+      {resource !== 'holidays' && (
       <div className="filter-bar">
         <input
           placeholder="Search..."
@@ -92,7 +100,9 @@ export default function MasterDataList() {
         />
         <span style={{ fontSize: 11, color: 'var(--c-text-2)' }}>{filtered.length} items</span>
       </div>
+      )}
 
+      {resource === 'holidays' ? <HolidaysPanel /> : (
       <div className="data-table">
         <div className="data-table-body">
           {loading ? <div className="empty">Loading...</div> :
@@ -114,6 +124,7 @@ export default function MasterDataList() {
           }
         </div>
       </div>
+      )}
       <p className="empty" style={{ marginTop: 16, fontSize: 11 }}>
         Ghi master data yêu cầu quyền (server kiểm tra theo role).
       </p>

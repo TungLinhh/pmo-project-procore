@@ -144,11 +144,13 @@ export const auth = {
 };
 
 // Issues (Mục 4-5, 6.5)
+// NOTE (P1): issues.addDirective removed — it POSTed /issues/:id/directives,
+// which never existed server-side (directives live at POST /directives with
+// issue_id in body; see IssueDetail). Deleted to prevent future misuse.
 export const issues = {
   list: (projectId, params) => request(`/projects/${projectId}/issues${qs(params)}`),
   get: (id) => request(`/issues/${id}`),
   create: (data) => request('/issues', { method: 'POST', body: data }),
-  addDirective: (id, body, notifyTo) => request(`/issues/${id}/directives`, { method: 'POST', body: { body, notify_to_user_ids: notifyTo } }),
 };
 
 // Directives (CEO/PMO qualitative notes)
@@ -212,8 +214,9 @@ export const materialBreakdown = {
 };
 
 export const construction = {
+  // NOTE (P1): construction.byZone removed — no GET /projects/:id/zones/:code/items
+  // route exists; the canonical zone filter is ?zone= on construction.schedule.
   schedule: (projectId, params) => request(`/projects/${projectId}/construction-schedule${qs(params)}`),
-  byZone: (projectId, code) => request(`/projects/${projectId}/zones/${code}/items`),
   updateProgress: (projectId, itemId, data) => request(`/projects/${projectId}/construction-schedule/${itemId}`, { method: 'PATCH', body: data }),
 };
 
