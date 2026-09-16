@@ -1389,6 +1389,10 @@ docker compose restart backend
 | 2026-09-15 | Wave 2 v0.8.0 | Least-privilege pmo_app + owner pool split, password rotation + login gate, offline enqueue + field outbox, db-role/password-rotation/field-offline suites | (this commit) |
 | 2026-09-15 | Wave 3 v0.9.0 | BIM store-only library (IFC metadata, zone linking) + ERP round-trip (AP CSV export, vendor match, SFTP push), bim-intake/erp-roundtrip/project-list-roles suites | (this commit) |
 | 2026-09-16 | Remainder v0.10.0 | S3 driver (MinIO-first) + storage seam async, nested departments + bottom-up chains, SSE realtime + Bell hook, FAST client + signed webhooks, three.js BIM viewer (lazy chunk) | (this commit) |
+| 2026-09-16 | Bugfix audit P0 v0.10.1 | Material-create 404 → createUsage; async safety net (ah + Router/application patch, /api JSON 404, error handler pre-fallback); SSE 401 pre-writeHead; area-hierarchy route (zones fallback); exposed 2 SPA-HTML false-200s → real material-submittals/manpower routes | `aab4022` |
+| 2026-09-16 | Bugfix audit P1 v0.10.2 | CompressPanel scenario list+rollback + link create/delete; HolidaysPanel tab; stale helper deletion; cron overlap guards; SSE 90s reap + Bell overlap guard/onopen reset | `93e538a` |
+| 2026-09-16 | Bugfix audit P2 v0.10.3 | optional-dep 503 guards (ssh2/aws-sdk/xlsx); guarded frontend awaits; Toast/UploadWizard/DailyReportForm timer hygiene | `11e09e4` |
+| 2026-09-16 | Bugfix audit P3 v0.10.4 | Upload canonical-prefix table; install-script audit (ssh2 optional binding tolerated, pure-JS fallback); orphan sweep — dashboard/portfolio-kpi/kpi-history kept (e2e-covered), business-process/:code wired into MasterDataList | (this commit) |
 
 ### 16.1 Known limitations (v0.8.0)
 
@@ -1407,6 +1411,7 @@ docker compose restart backend
 - **Realtime**: `/api/stream` mounts FIRST (bare `/api` routers run header-only requireAuth on every subpath and would 401 the query-token handshake). Events: notification.created (all notify paths + TVGS), approval.decided + compression.applied (tenant admins).
 - **BIM viewer**: `SetWasmPath` appends bare names — must pass a custom `locateFile` returning the hashed `?url` asset. `FlatMesh.geometries` is an Emscripten Vector (size/get), not iterable.
 - **Migrations**: SQL files reject `//` comments at runner level (3 strikes in v0.9.0); connector columns documented per rank above.
+- **Bugfix audit P0–P3 (v0.10.1–v0.10.4)**: Express 4 async safety net lives in `lib/async-handler.js`: prototype patch (future registrations) + retroactive `wrapAllRouters` (existing stacks — must recurse into `layer.route.stack`, wrapping the Route dispatcher alone does NOT catch handler rejections; proven live: forced PG 22P02 in a bare handler → JSON 500, process alive). `/api` unknown paths are JSON 404 (the old SPA `*` fallback returned HTML 200 for missing API routes, which made 2 e2e assertions false-pass). Upload canonical prefixes: writes `/api/upload`, reads `/api/uploads` (mount-site table in `index.js`). Install scripts: only ssh2 has one (`install.js` builds an OPTIONAL crypto binding, failure tolerated → pure-JS fallback active); aws-sdk/xlsx pure JS; own packages have no install hooks.
 
 ### 16.3 Roadmap (current)
 

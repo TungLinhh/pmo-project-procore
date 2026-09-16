@@ -13,11 +13,23 @@ import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getDb, closeDb } from './db/index.js';
-import { installAsyncSafetyNet } from './lib/async-handler.js';
+import { installAsyncSafetyNet, wrapAllRouters } from './lib/async-handler.js';
 
 // P0-2 safety net FIRST: patches Router.METHOD/use so any bare async handler
 // rejection flows to the Express error handler instead of hanging.
 installAsyncSafetyNet();
+// Retroactive half of the net (P3): route modules above already registered
+// with the unpatched prototype (import hoisting) — wrap their stacks in place.
+wrapAllRouters([
+  authRouter, meRouter, projectsRouter, issuesRouter, auditRouter, kpiRouter,
+  kpiTargetsRouter, shopRouter, materialSubmittalsRouter, paymentRouter,
+  notificationsRouter, directivesRouter, materialsRouter, dailyRouter,
+  syncRouter, dashboardRouter, masterDataRouter, businessProcessRouter,
+  uploadRouter, batchRouter, classifyRouter, otdRouter, jobsRouter,
+  approvalChainsRouter, adminRouter, scheduleLinksRouter,
+  scheduleCompressRouter, holidaysRouter, aiRouter, aiAssistantRouter,
+  bimRouter, exportRouter, erpRouter, streamRouter,
+]);
 import { registerWizardRoutes } from './routes/wizard.js';
 
 import authRouter from './routes/auth.js';
@@ -113,9 +125,25 @@ app.use('/api/ai', aiAssistantRouter);                      // AI ask + drafts (
 app.use('/api', bimRouter);                                 // BIM library (v0.9.0)
 app.use('/api/export', exportRouter);                       // AP ledger export (v0.9.0)
 app.use('/api/erp', erpRouter);                             // ERP profiles + push log (v0.9.0)
-app.use('/api/upload', uploadRouter);
+// Upload pipeline mounts (P3-12 canonical table — READ BEFORE ADDING ALIASES).
+// Frontend usage is split across both prefixes BY DESIGN, so both mounts stay:
+//   singular /api/upload  → writes: POST / (file), POST /batch (zip),
+//                           POST /classify, POST /:id/crosscheck,
+//                           wizard POST /:id/configure|preview|commit
+//   plural /api/uploads   → reads:  GET / (list), GET /review, GET /:id,
+//                           GET /:id/rows, GET /:id/download
+// The cross twins (POST /uploads, GET /upload, POST /uploads/classify, …)
+// are served by the same handlers — intentionally kept (no 301: redirecting
+// multipart POST bodies risks resend bugs for 50MB uploads; removal would
+// churn 4+ frontend files for zero behavior gain). Wire NEW endpoints under
+// the canonical prefix above.
+// ORDER MATTERS (P3-12 fix): static subpaths (/review, /batch, /classify)
+// must win over uploadRouter's greedy GET /:id — the old order let
+// GET /api/upload/review fall into /:id with id='review' (400). Specific
+// routers mount first on BOTH prefixes.
+app.use('/api/upload', classifyRouter); // POST /api/upload/classify, GET /api/upload/review
 app.use('/api/upload', batchRouter); // POST /api/upload/batch (zip intake)
-app.use('/api/upload', classifyRouter); // POST /api/upload/classify (+alias GET /review)
+app.use('/api/upload', uploadRouter);
 app.use('/api/uploads', classifyRouter); // GET /api/uploads/review (+alias POST /classify)
 app.use('/api/uploads', uploadRouter);                         // GET list
 
