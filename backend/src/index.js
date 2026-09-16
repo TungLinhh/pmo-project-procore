@@ -13,6 +13,11 @@ import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getDb, closeDb } from './db/index.js';
+import { installAsyncSafetyNet } from './lib/async-handler.js';
+
+// P0-2 safety net FIRST: patches Router.METHOD/use so any bare async handler
+// rejection flows to the Express error handler instead of hanging.
+installAsyncSafetyNet();
 import { registerWizardRoutes } from './routes/wizard.js';
 
 import authRouter from './routes/auth.js';
@@ -117,16 +122,28 @@ app.use('/api/uploads', uploadRouter);                         // GET list
 // Wizard (still legacy, separate file)
 registerWizardRoutes(app);
 
+// P0-2: unknown /api/* must be JSON 404, never the SPA HTML (the old
+// app.get('*') fallback swallowed missing API routes and SSE errors).
+app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
+
+// ============ Error handler (before SPA fallback so /api JSON errors survive) ============
+app.use((err, req, res, next) => {
+  console.error('[error]', err);
+  if (res.headersSent) return next(err);
+  res.status(err.status || 500).json({ error: err.message || 'Internal error' });
+});
+
 // ============ Serve frontend (Vite build) ============
 app.use(express.static(path.join(__dirname, '../../frontend/dist')));
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../../frontend/dist/index.html'));
 });
 
-// ============ Error handler (cuối cùng) ============
+// Final safety: any error escaping past static/fallback still becomes JSON.
 app.use((err, req, res, next) => {
-  console.error('[error]', err);
-  res.status(500).json({ error: err.message || 'Internal error' });
+  console.error('[error:late]', err);
+  if (res.headersSent) return next(err);
+  res.status(err.status || 500).json({ error: err.message || 'Internal error' });
 });
 
 const server = app.listen(PORT, () => {

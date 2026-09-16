@@ -188,6 +188,30 @@ router.get('/:id/zones', async (req, res) => {
   res.json(await db.prepare('SELECT * FROM zones WHERE project_id = ? ORDER BY code').allAsync(req.params.id));
 });
 
+// P0-4: area-hierarchy dead end — FieldStubs.jsx + api.areaHierarchy expect
+// GET /api/projects/:id/area-hierarchy. Serve the real area_hierarchy table;
+// fall back to zones aliased as level='zone' so the field UI (which only
+// renders level==='zone') works with zero new tables.
+router.get('/:id/area-hierarchy', async (req, res) => {
+  const db = getDb();
+  let rows = [];
+  try {
+    rows = await db.prepare(
+      'SELECT id, project_id, parent_id, level, code, name_vi, name_en, sort_order FROM area_hierarchy WHERE project_id = ? ORDER BY sort_order, id'
+    ).allAsync(req.params.id);
+  } catch { rows = []; }
+  if (!rows.length) {
+    const zones = await db.prepare(
+      'SELECT id, code, name_vi, name_en FROM zones WHERE project_id = ? ORDER BY code'
+    ).allAsync(req.params.id);
+    rows = zones.map((z) => ({
+      id: z.id, project_id: Number(req.params.id), parent_id: null,
+      level: 'zone', code: z.code, name_vi: z.name_vi, name_en: z.name_en, sort_order: 0,
+    }));
+  }
+  res.json(rows);
+});
+
 router.get('/:id/materials', async (req, res) => {
   const db = getDb();
   const lim = Math.min(parseInt(req.query.limit) || 200, 500);
@@ -207,6 +231,19 @@ router.get('/:id/payments', async (req, res) => {
 router.get('/:id/daily-reports', async (req, res) => {
   const db = getDb();
   res.json(await db.prepare('SELECT * FROM daily_reports WHERE project_id = ? ORDER BY report_date DESC').allAsync(req.params.id));
+});
+
+// Project manpower: daily_manpower rows joined through daily_reports.
+// (The e2e suite + field UI expect a project-scoped list; the cross-project
+// rollup lives at GET /api/manpower/rollup.)
+router.get('/:id/manpower', async (req, res) => {
+  const db = getDb();
+  const lim = Math.min(parseInt(req.query.limit) || 200, 500);
+  res.json(await db.prepare(
+    `SELECT dm.*, dr.report_date FROM daily_manpower dm
+     JOIN daily_reports dr ON dr.id = dm.daily_report_id
+     WHERE dr.project_id = ? ORDER BY dr.report_date DESC, dm.id DESC LIMIT ?`
+  ).allAsync(req.params.id, lim));
 });
 
 router.get('/:id/issues', async (req, res) => {
@@ -305,6 +342,19 @@ router.get('/:id/material-breakdown', async (req, res) => {
 });
 
 // Submittal overdue / pending
+router.get('/:id/material-submittals', async (req, res) => {
+  const db = getDb();
+  const { status } = req.query;
+  const where = ['project_id = $1'];
+  const params = [req.params.id];
+  let i = 2;
+  if (status) { where.push(`status = $${i++}`); params.push(status); }
+  params.push(Math.min(parseInt(req.query.limit) || 200, 500));
+  res.json(await db.prepare(
+    `SELECT * FROM material_submittals WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT $${i}`
+  ).allAsync(...params));
+});
+
 router.get('/:id/material-submittals/overdue', async (req, res) => {
   const db = getDb();
   res.json(await db.prepare(`

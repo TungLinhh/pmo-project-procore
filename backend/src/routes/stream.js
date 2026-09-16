@@ -8,8 +8,15 @@ import { subscribe, subscriberCount } from '../lib/events.js';
 
 const router = Router({ mergeParams: true });
 
-router.get('/', async (req, res) => {
-  const user = await verifyAccess(req.query.token);
+router.get('/', async (req, res, next) => {
+  let user;
+  try {
+    user = await verifyAccess(req.query.token);
+  } catch (e) {
+    // P0-3: DB/pool failure during handshake must be 401 JSON, never a hang
+    // (Express 4 would leave an async throw unhandled pre-writeHead).
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',

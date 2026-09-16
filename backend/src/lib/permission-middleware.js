@@ -18,6 +18,7 @@ const ROUTE_MODULE_MAP = [
   // role gate here mirrors schedule read so all member roles pass).
   { method: 'GET', pattern: /^\/api\/projects\/\d+$/, module: 'schedule', action: 'read' },
   { method: 'GET', pattern: /^\/api\/projects\/\d+\/zones/, module: 'schedule', action: 'read' },
+  { method: 'GET', pattern: /^\/api\/projects\/\d+\/area-hierarchy/, module: 'schedule', action: 'read' },
   { method: 'PATCH', pattern: /^\/api\/projects\/\d+$/, module: 'master_data', action: 'write' },
   { method: 'POST', pattern: /^\/api\/projects\/\d+\/(close|revoke-close)/, module: 'master_data', action: 'write' },
   { method: 'GET', pattern: /^\/api\/projects\/\d+\/members/, module: 'schedule', action: 'read' },
@@ -55,7 +56,7 @@ const ROUTE_MODULE_MAP = [
   // P3 materials + submittals (submit/approve/reject are writes, not matrix-approve)
   { method: 'GET', pattern: /^\/api\/projects\/\d+\/materials/, module: 'material', action: 'read' },
   { method: 'POST', pattern: /^\/api\/materials/, module: 'material', action: 'write' },
-  { method: 'GET', pattern: /^\/api\/projects\/\d+\/material-submittals\//, module: 'material', action: 'read' },
+  { method: 'GET', pattern: /^\/api\/projects\/\d+\/material-submittals(\/|$)/, module: 'material', action: 'read' },
   { method: 'GET', pattern: /^\/api\/projects\/\d+\/material-breakdown/, module: 'material', action: 'read' },
   { method: 'GET', pattern: /^\/api\/material-submittals/, module: 'material', action: 'read' },
   { method: 'POST', pattern: /^\/api\/material-submittals/, module: 'material', action: 'write' },
@@ -75,6 +76,7 @@ const ROUTE_MODULE_MAP = [
   { method: 'GET', pattern: /^\/api\/projects\/\d+\/ar-(contracts|lines)/, module: 'payment', action: 'read' },
   // Field: daily reports + manpower + photos
   { method: 'GET', pattern: /^\/api\/projects\/\d+\/daily-reports/, module: 'daily_report', action: 'read' },
+  { method: 'GET', pattern: /^\/api\/projects\/\d+\/manpower/, module: 'daily_report', action: 'read' },
   { method: 'POST', pattern: /^\/api\/projects\/\d+\/daily-reports/, module: 'daily_report', action: 'write' },
   { method: 'GET', pattern: /^\/api\/daily-reports\//, module: 'daily_report', action: 'read' },
   { method: 'POST', pattern: /^\/api\/daily-reports\/\d+\/(manpower|photos)/, module: 'daily_report', action: 'write' },

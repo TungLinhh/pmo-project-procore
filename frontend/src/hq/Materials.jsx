@@ -1,7 +1,7 @@
 // Material list page (Mục 6.3) — submittal workflow: DRAFT → SUBMITTED → APPROVED/REJECTED (+SLA).
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { projects, getToken, preferDemoProject } from '../api/index.js';
+import { projects, materials, getToken, preferDemoProject } from '../api/index.js';
 import { ICON } from '../icons.jsx';
 import PieChart from '../components/PieChart.jsx';
 import PieTooltip from '../components/PieTooltip.jsx';
@@ -173,11 +173,7 @@ export default function Materials() {
                 if (!addForm.material_code) { toast.error('Mã vật tư bắt buộc'); return; }
                 setAddBusy(true);
                 try {
-                  const r = await fetch(`/api/projects/${selectedProject}/materials`, {
-                    method: 'POST',
-                    headers: { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ...addForm, progress_pct: Number(addForm.progress_pct) / 100, zone_id: Number(addForm.zone_id) || null })
-                  }).then(r => r.json());
+                  const r = await materials.createUsage({ ...addForm, project_id: Number(selectedProject), progress_pct: Number(addForm.progress_pct) / 100, zone_id: Number(addForm.zone_id) || null });
                   if (r.error) throw new Error(r.error);
                   toast.success('Đã thêm material: ' + addForm.material_code);
                   setItems([r, ...items]);
