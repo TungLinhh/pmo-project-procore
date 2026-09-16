@@ -1,5 +1,8 @@
 // Excel helpers - normalize cells
-import XLSX from 'xlsx';
+// P2-9: xlsx loads via needSync so a missing dep throws an actionable 503 at
+// first use instead of crashing backend boot (static import would fail load).
+import { needSync } from './optional-dep.js';
+const XLSX = needSync('xlsx');
 
 export function isError(v) {
   if (v === null || v === undefined) return false;

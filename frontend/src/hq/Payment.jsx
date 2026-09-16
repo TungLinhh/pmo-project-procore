@@ -95,6 +95,11 @@ export default function Payment() {
         toast.error('Lỗi tải payment: ' + e.message);
         setLoading(false);
       }
+      // P2-10: trailing .catch — anything thrown outside the inner try (e.g.
+      // a synchronous setState path) still clears Loading instead of hanging.
+      }).catch((e) => {
+        toast.error('Lỗi tải payment: ' + (e?.message || e));
+        setLoading(false);
       });
   }, [selectedProject]);
 

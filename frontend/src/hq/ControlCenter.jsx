@@ -72,31 +72,34 @@ export default function ProjectControlCenter() {
   const nav = useNavigate();
 
   useEffect(() => {
+    // P2-10: unguarded await — network failure was an unhandled rejection.
     api.list().then(list => {
-      setAllProjects(list);
+      setAllProjects(Array.isArray(list) ? list : []);
       if (list[0]) setSelectedProject(preferDemoProject(list));
-    });
+    }).catch(() => setAllProjects([]));
   }, []);
 
   useEffect(() => {
     if (!selectedProject) return;
     setLoading(true);
+    // P2-10: schedule + shop had no .catch — one rejection skipped the whole
+    // .then and left Loading stuck forever. Every leg now degrades to [].
     Promise.all([
-      construction.schedule(selectedProject),
-      shopApi.drawings(selectedProject),
+      construction.schedule(selectedProject).catch(() => []),
+      shopApi.drawings(selectedProject).catch(() => []),
       fetch(`/api/projects/${selectedProject}/payments`, { headers: _authHeaders() }).then(r => r.json()).catch(() => []),
       fetch(`/api/projects/${selectedProject}/payment-requests`, { headers: _authHeaders() }).then(r => r.json()).catch(() => []),
       fetch(`/api/projects/${selectedProject}/materials`, { headers: _authHeaders() }).then(r => r.json()).catch(() => []),
       matBreak.byProject(selectedProject).catch(() => []),
     ]).then(([sched, sd, payments, prs, materials, matBreakdown]) => {
-      setSchedule(sched);
-      setShopData(sd);
+      setSchedule(Array.isArray(sched) ? sched : []);
+      setShopData(Array.isArray(sd) ? sd : []);
       setPaymentData(Array.isArray(prs) && prs.length ? prs : payments);
-      setMaterialData(materials);
+      setMaterialData(Array.isArray(materials) ? materials : []);
       setMatBreakdown(matBreakdown);
       setLoadedAt(new Date());
       setLoading(false);
-    });
+    }).catch(() => setLoading(false));
     fetch('/api/audit?limit=4', { headers: _authHeaders() }).then(r => r.json()).then(d => {
       setRecentActivity(Array.isArray(d) ? d : []);
     }).catch(() => setRecentActivity([]));

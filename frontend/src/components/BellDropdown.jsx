@@ -94,17 +94,22 @@ export default function BellDropdown() {
   }, [open]);
 
   async function handleItemClick(n) {
-    if (!n.read_at) {
-      await api.notifications.markRead(n.id);
-      load();
-    }
+    // P2-10: unguarded awaits — a failed mark-read left the click hanging.
+    try {
+      if (!n.read_at) {
+        await api.notifications.markRead(n.id);
+        load();
+      }
+    } catch { /* badge refresh is best-effort */ }
     setOpen(false);
     nav(navTargetFor(n));
   }
 
   async function handleMarkAll() {
-    await api.notifications.markAllRead();
-    load();
+    try {
+      await api.notifications.markAllRead();
+      load();
+    } catch { /* best-effort */ }
   }
 
   const items = data.items;

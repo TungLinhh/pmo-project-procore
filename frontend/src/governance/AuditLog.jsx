@@ -20,18 +20,23 @@ async function fetchAudit(filters) {
 }
 
 async function exportAudit(format, filters) {
-  const params = new URLSearchParams();
-  params.set('format', format);
-  Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
-  const res = await fetch(`/api/audit/export?${params}`, { headers: authHeaders() });
-  if (!res.ok) { alert('Export failed'); return; }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `audit-${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.${format}`;
-  a.click();
-  URL.revokeObjectURL(url);
+  // P2-10: export click floated the promise — network throw was unhandled.
+  try {
+    const params = new URLSearchParams();
+    params.set('format', format);
+    Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
+    const res = await fetch(`/api/audit/export?${params}`, { headers: authHeaders() });
+    if (!res.ok) { alert('Export failed'); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `audit-${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.${format}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (e) {
+    alert('Export failed: ' + e.message);
+  }
 }
 
 const ACTION_COLORS = {

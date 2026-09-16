@@ -18,9 +18,22 @@ export default function DailyReportForm({ onSaved }) {
   const [uploading, setUploading] = useState(false);
   const [manpower, setManpower] = useState([]);
   const fileInputRef = useRef(null);
+  // P2-11: photo object URLs + their 10-min revoke timers. Previously
+  // fire-and-forget: switching reports leaked both the URLs (until the timer
+  // fired) and the timers themselves on unmount. Tracked here, revoked and
+  // cleared on report change / unmount.
+  const photoTimers = useRef([]);
+  const photoUrls = useRef([]);
+  const clearPhotoTimers = () => { photoTimers.current.forEach(clearTimeout); photoTimers.current = []; };
+  const revokeAllPhotos = () => {
+    clearPhotoTimers();
+    photoUrls.current.forEach(u => { try { URL.revokeObjectURL(u); } catch {} });
+    photoUrls.current = [];
+  };
+  useEffect(() => () => revokeAllPhotos(), []);
 
   useEffect(() => {
-    projects.list().then(setAllProjects);
+    projects.list().then(setAllProjects).catch(() => setAllProjects([]));
   }, []);
 
   async function createReport() {
@@ -48,8 +61,15 @@ export default function DailyReportForm({ onSaved }) {
       try { return { ...p, url: await daily.photoBlob(p.id) }; }
       catch { return { ...p, url: null }; }
     }));
-    withUrls.forEach(p => { if (p.url) setTimeout(() => URL.revokeObjectURL(p.url), 10 * 60 * 1000); });
+    // Revoke the previous report's URLs now (not in 10 min) and drop their timers.
+    revokeAllPhotos();
     setPhotos(withUrls);
+    withUrls.forEach(p => {
+      if (p.url) {
+        photoUrls.current.push(p.url);
+        photoTimers.current.push(setTimeout(() => URL.revokeObjectURL(p.url), 10 * 60 * 1000));
+      }
+    });
   }
 
   useEffect(() => {

@@ -59,10 +59,13 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
     apiProjects.zones(projectId).then(setZones).catch(() => setZones([]));
   }, [projectId]);
 
-  // Reset on close
+  // Reset on close.
+  // P2-11: the 300ms reset was fire-and-forget — a rapid close→reopen inside
+  // the window wiped the fresh session's state (stale reset). The timer is
+  // now cancelled on reopen/unmount.
   useEffect(() => {
     if (!open) {
-      setTimeout(() => {
+      const t = setTimeout(() => {
         setStep(0); setFile(null); setUploadId(null);
         setBulkMode(!!startBulk); setBulkFiles([]); setBulkResult(null); setBulkBusy(false);
         setProjectId(defaultProjectId || ''); setZoneId(''); setDocType('');
@@ -71,6 +74,7 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
         setNewProject({ code: '', name_vi: '', package: 'MEP' });
         setNewZone({ code: '', name_vi: '' });
       }, 300);
+      return () => clearTimeout(t);
     }
   }, [open, defaultProjectId]);
 

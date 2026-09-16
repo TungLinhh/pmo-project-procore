@@ -21,7 +21,13 @@ async function sftpPut({ host, port, username, secret, remotePath, data }) {
   if (process.env.ERP_SFTP_MOCK === '1') {
     return { ok: true, mocked: true, bytes: Buffer.byteLength(data) };
   }
-  const { Client } = await import('ssh2');
+  const { Client } = await import('ssh2').catch((e) => {
+    // P2-9: missing ssh2 → actionable 503, never raw Cannot-find-module 500.
+    if (e?.code === 'ERR_MODULE_NOT_FOUND' || /Cannot find (module|package)/.test(String(e?.message || ''))) {
+      throw Object.assign(new Error('Optional dependency missing: ssh2 (run: npm install ssh2)'), { status: 503 });
+    }
+    throw e;
+  });
   return new Promise((resolve, reject) => {
     const conn = new Client();
     const timer = setTimeout(() => { try { conn.end(); } catch {} reject(new Error('sftp connect timeout (15s)')); }, 15000);

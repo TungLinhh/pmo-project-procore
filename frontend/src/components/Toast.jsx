@@ -1,7 +1,7 @@
 // Toast/Snackbar - góc dưới trái, 2 loại success/error, tự ẩn 3s, click tắt sớm
 // Dùng: import { toast } from '../components/Toast.jsx'
 //       toast.success('Saved'); toast.error('Failed: ' + e.message)
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 
 let listeners = new Set();
 let counter = 0;
@@ -18,13 +18,22 @@ export const toast = {
 
 function ToastItem({ item, onClose }) {
   const [exiting, setExiting] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => {
-      setExiting(true);
-      setTimeout(() => onClose(item.id), 200);
-    }, 3000);
-    return () => clearTimeout(t);
+  // P2-11: stacked timeouts — every click/exit scheduled its own orphan
+  // setTimeout(onClose). All timers live in one ref, cleared on unmount, and
+  // scheduleClose() is idempotent so rapid clicks can't queue duplicate closes.
+  const timers = useRef([]);
+  const closed = useRef(false);
+  const scheduleClose = useCallback((delay) => {
+    if (closed.current) return;
+    closed.current = true;
+    setExiting(true);
+    timers.current.push(setTimeout(() => onClose(item.id), delay));
   }, [item.id, onClose]);
+  useEffect(() => {
+    timers.current.push(setTimeout(() => scheduleClose(200), 3000));
+    const stash = timers.current;
+    return () => stash.forEach(clearTimeout);
+  }, [scheduleClose]);
 
   const colors = {
     success: { bg: '#16a34a', icon: '✓' },
@@ -34,10 +43,10 @@ function ToastItem({ item, onClose }) {
   const c = colors[item.type] || colors.info;
 
   return (
-    <div className={`toast toast-${item.type} ${exiting ? 'toast-exit' : ''}`} role="status" onClick={() => { setExiting(true); setTimeout(() => onClose(item.id), 200); }}>
+    <div className={`toast toast-${item.type} ${exiting ? 'toast-exit' : ''}`} role="status" onClick={() => scheduleClose(200)}>
       <span className="toast-icon" style={{ background: c.bg }}>{c.icon}</span>
       <span className="toast-msg">{item.message}</span>
-      <button className="toast-close" onClick={(e) => { e.stopPropagation(); setExiting(true); setTimeout(() => onClose(item.id), 200); }} aria-label="Close">×</button>
+      <button className="toast-close" onClick={(e) => { e.stopPropagation(); scheduleClose(200); }} aria-label="Close">×</button>
     </div>
   );
 }

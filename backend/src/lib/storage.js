@@ -14,6 +14,7 @@
 // NOTE: multer still buffers uploads (see routes); true streaming ingest is
 // future work. This module only guarantees where bytes land and how keys form.
 import { createHash } from 'node:crypto';
+import { need } from './optional-dep.js'; // P2-9: missing @aws-sdk → 503 naming the dep
 import { writeFileSync, statSync, existsSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -79,7 +80,7 @@ async function s3() {
     return { emulator: _emulator };
   }
   if (!_s3Client) {
-    const { S3Client } = await import('@aws-sdk/client-s3');
+    const { S3Client } = await need('@aws-sdk/client-s3');
     _s3Client = new S3Client({
       region: process.env.S3_REGION || 'us-east-1',
       endpoint: process.env.S3_ENDPOINT,
@@ -106,7 +107,7 @@ const s3Driver = {
       if (!s.emulator.has(key)) s.emulator.set(key, Buffer.from(buffer));
       return { key, hash, size: buffer.length };
     }
-    const { HeadObjectCommand, PutObjectCommand } = await import('@aws-sdk/client-s3');
+    const { HeadObjectCommand, PutObjectCommand } = await need('@aws-sdk/client-s3');
     try {
       const head = await s.client.send(new HeadObjectCommand({ Bucket: s3Bucket(), Key: key }));
       return { key, hash, size: Number(head.ContentLength ?? buffer.length) }; // dedupe: skip PUT
@@ -119,7 +120,7 @@ const s3Driver = {
   async exists(key) {
     const s = await s3();
     if (s.emulator) return s.emulator.has(String(key));
-    const { HeadObjectCommand } = await import('@aws-sdk/client-s3');
+    const { HeadObjectCommand } = await need('@aws-sdk/client-s3');
     try {
       await s.client.send(new HeadObjectCommand({ Bucket: s3Bucket(), Key: String(key) }));
       return true;
@@ -134,7 +135,7 @@ const s3Driver = {
       const b = s.emulator.get(String(key));
       return b ? { size: b.length } : null;
     }
-    const { HeadObjectCommand } = await import('@aws-sdk/client-s3');
+    const { HeadObjectCommand } = await need('@aws-sdk/client-s3');
     try {
       const head = await s.client.send(new HeadObjectCommand({ Bucket: s3Bucket(), Key: String(key) }));
       return { size: Number(head.ContentLength ?? 0) };
@@ -150,7 +151,7 @@ const s3Driver = {
       if (!b) throw new Error(`storage.readBuffer: missing key ${key}`);
       return Buffer.from(b);
     }
-    const { GetObjectCommand } = await import('@aws-sdk/client-s3');
+    const { GetObjectCommand } = await need('@aws-sdk/client-s3');
     const out = await s.client.send(new GetObjectCommand({ Bucket: s3Bucket(), Key: String(key) }));
     const chunks = [];
     for await (const chunk of out.Body) chunks.push(chunk);
@@ -159,7 +160,7 @@ const s3Driver = {
   async remove(key) {
     const s = await s3();
     if (s.emulator) { s.emulator.delete(String(key)); return; }
-    const { DeleteObjectCommand } = await import('@aws-sdk/client-s3');
+    const { DeleteObjectCommand } = await need('@aws-sdk/client-s3');
     await s.client.send(new DeleteObjectCommand({ Bucket: s3Bucket(), Key: String(key) }));
   },
   async withTempFile(key, fn) {
@@ -179,7 +180,7 @@ const s3Driver = {
       res.setHeader('Content-Disposition', `attachment; filename="${filename || key}"`);
       return res.send(await this.readBuffer(key));
     }
-    const { GetObjectCommand } = await import('@aws-sdk/client-s3');
+    const { GetObjectCommand } = await need('@aws-sdk/client-s3');
     const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
     const url = await getSignedUrl(s.client, new GetObjectCommand({ Bucket: s3Bucket(), Key: String(key) }), { expiresIn: 900 });
     return res.redirect(url);

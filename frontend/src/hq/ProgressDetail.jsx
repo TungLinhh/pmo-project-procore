@@ -108,14 +108,23 @@ export default function ProgressDetail() {
   }
 
   async function download() {
-    const r = await fetch(exportApi.constructionSchedule(selectedProject), {
-      headers: { Authorization: `Bearer ${getToken()}` }
-    });
-    const blob = await r.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `construction-schedule-${selectedProject}.xlsx`;
-    a.click();
+    // P2-10: was an unguarded await (network throw → unhandled rejection).
+    // (Export buttons are currently hidden via exportApi.ENABLED=false, but the
+    // handler must still be safe if re-enabled.)
+    try {
+      const r = await fetch(exportApi.constructionSchedule(selectedProject), {
+        headers: { Authorization: `Bearer ${getToken()}` }
+      });
+      if (!r.ok) throw new Error('Không tải được file export');
+      const blob = await r.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `construction-schedule-${selectedProject}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      toast.error('Export lỗi: ' + e.message);
+    }
   }
 
   // Zone options

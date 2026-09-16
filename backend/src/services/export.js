@@ -1,5 +1,7 @@
 // Export: read data from DB → write Excel file matching HBG format
-import XLSX from 'xlsx';
+// P2-9: see lib/excel.js — 503-at-use instead of boot crash when xlsx missing.
+import { needSync } from '../lib/optional-dep.js';
+const XLSX = needSync('xlsx');
 import { getDb } from '../db/index.js';
 
 export async function exportDailyReport(dailyReportId) {
