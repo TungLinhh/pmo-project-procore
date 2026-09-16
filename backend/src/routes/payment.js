@@ -186,6 +186,17 @@ router.put('/payment-requests/:id', requireRole('ceo', 'admin', 'accounting'), a
       );
       return { ok: true };
     });
+    if (status === 'APPROVED' || status === 'REJECTED') {
+      const { emitDecision } = await import('../lib/events.js');
+      const proj = await db.prepare(
+        `SELECT c.project_id FROM payment_requests pr JOIN invoices i ON i.id = pr.invoice_id JOIN contracts c ON c.id = i.contract_id WHERE pr.id = ?`
+      ).getAsync(req.params.id);
+      await emitDecision(db, req.user.tenant_id, { kind: 'payment_request', id: Number(req.params.id), label: old.request_no, decision: status, projectId: proj?.project_id ?? null });
+      const { emitWebhook } = await import('../lib/erp-webhook.js');
+      await emitWebhook(req.user.tenant_id, `payment_request.${status.toLowerCase()}`, {
+        payment_request_id: Number(req.params.id), request_no: old.request_no, project_id: proj?.project_id ?? null,
+      });
+    }
     res.json({ ok: true, id: req.params.id, status });
   } catch (e) {
     res.status(500).json({ error: e.message });

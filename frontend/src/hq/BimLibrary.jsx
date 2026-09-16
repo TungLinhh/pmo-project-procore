@@ -130,7 +130,7 @@ export default function BimLibrary() {
                  <td className="num">{meta.space_count ?? '—'}{meta.truncated ? ' (cắt ngắn)' : ''}</td>
                  <td style={{ fontSize: 11 }}>{meta.schema || '—'}</td>
                  <td><a href={`/api/uploads/${m.id}/download`} style={{ fontSize: 12 }}>Tải .ifc</a></td>
-                 <td style={{ fontSize: 11, color: 'var(--c-text-2)' }}>coming</td>
+                 <td><a href={`/hq/bim/${m.id}`} style={{ fontSize: 12 }}>Mở 3D</a></td>
                </tr>
              );
            })}

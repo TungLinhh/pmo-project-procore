@@ -56,6 +56,13 @@ router.post('/:resource', async (req, res) => {
   // Whitelist common columns
   const safe = cols.filter(c => /^[a-z_]+$/i.test(c));
   if (!safe.length) return res.status(400).json({ error: 'No valid columns' });
+  // Nested departments (Wave D2): parent must live in this tenant.
+  // No cycle check needed on CREATE — a brand-new row has no children, so it
+  // cannot close a loop by construction. PATCH validates acyclicity.
+  if (table === 'departments' && data.parent_id != null) {
+    const parent = await db.prepare('SELECT id FROM departments WHERE id = ? AND tenant_id = ?').getAsync(data.parent_id, req.user.tenant_id);
+    if (!parent) return res.status(404).json({ error: 'Parent department not found in this tenant' });
+  }
   const placeholders = safe.map((_, i) => `$${i + 1}`).join(', ');
   try {
     const r = await withAudit(req, {
@@ -72,6 +79,46 @@ router.post('/:resource', async (req, res) => {
       return ins.rows[0];
     });
     res.json(r);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PATCH /api/master-data/departments/:id — rename / reparent (Wave D2).
+// parent_id validated same-tenant + acyclic; null detaches to root.
+router.patch('/departments/:id', async (req, res) => {
+  const db = getDb();
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'id must be integer' });
+  const old = await db.prepare('SELECT * FROM departments WHERE id = ? AND tenant_id = ?').getAsync(id, req.user.tenant_id);
+  if (!old) return res.status(404).json({ error: 'Not found' });
+  const { code, name_vi, parent_id = undefined } = req.body || {};
+  if (parent_id !== undefined) {
+    const { validateDeptParent } = await import('../lib/approval.js');
+    const v = await validateDeptParent(db, req.user.tenant_id, id, parent_id);
+    if (!v.ok) return res.status(422).json({ error: v.error });
+  }
+  const patch = {};
+  if (code !== undefined) patch.code = String(code);
+  if (name_vi !== undefined) patch.name_vi = String(name_vi);
+  if (parent_id !== undefined) patch.parent_id = parent_id;
+  if (!Object.keys(patch).length) return res.status(400).json({ error: 'Nothing to update' });
+  try {
+    const result = await withAudit(req, {
+      action: 'UPDATE', resourceType: 'departments', resourceId: id,
+      before: { code: old.code, name_vi: old.name_vi, parent_id: old.parent_id },
+      after: { ...old, ...patch },
+      fieldChanges: Object.keys(patch).map((k) => ({ field: k, from: old[k], to: patch[k] })),
+      note: `Sửa bộ phận ${old.code}`,
+    }, async (client) => {
+      const cols = Object.keys(patch);
+      const r = await client.query(
+        `UPDATE departments SET ${cols.map((c, i) => `${c} = $${i + 1}`).join(', ')} WHERE id = $${cols.length + 1} RETURNING *`,
+        [...cols.map((c) => patch[c]), id]
+      );
+      return r.rows[0];
+    });
+    res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

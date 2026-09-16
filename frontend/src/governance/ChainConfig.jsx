@@ -77,6 +77,33 @@ export default function ChainConfig() {
     } catch (e) { toast.error('Lỗi: ' + e.message); }
   }
 
+  // Department tree (Wave D2): depth from parent_id map, cycle-guarded locally.
+  const deptDepth = (() => {
+    const byId = new Map(departments.map(d => [d.id, d]));
+    const memo = new Map();
+    const depth = (id, seen = new Set()) => {
+      if (id == null || seen.has(id)) return 0;
+      if (memo.has(id)) return memo.get(id);
+      seen.add(id);
+      const d = 1 + depth(byId.get(id)?.parent_id ?? null, seen);
+      memo.set(id, d);
+      return d;
+    };
+    return new Map(departments.map(d => [d.id, depth(d.id)]));
+  })();
+  const deptLabel = (d) => `${'— '.repeat(Math.max(0, (deptDepth.get(d.id) || 1) - 1))}${d.code} · ${d.name_vi}`;
+
+  async function setDeptParent(deptId, parentId) {
+    try {
+      await api('/master-data/departments/' + deptId, {
+        method: 'PATCH',
+        body: JSON.stringify({ parent_id: parentId ? Number(parentId) : null }),
+      });
+      toast.success('Đã cập nhật cơ cấu');
+      load();
+    } catch (e) { toast.error('Lỗi: ' + e.message); }
+  }
+
   return (
     <div>
       <div className="page-header">
@@ -118,7 +145,7 @@ export default function ChainConfig() {
             <div style={{ fontSize: 11, color: 'var(--c-text-2)' }}>Bộ phận (trống = default)</div>
             <select value={form.department_id} onChange={e => setForm({ ...form, department_id: e.target.value })}>
               <option value="">default toàn tenant</option>
-              {departments.map(d => <option key={d.id} value={d.id}>{d.code} · {d.name_vi}</option>)}
+              {departments.map(d => <option key={d.id} value={d.id}>{deptLabel(d)}</option>)}
             </select>
           </label>
         </div>
@@ -136,6 +163,28 @@ export default function ChainConfig() {
           <button className="btn btn-secondary" onClick={dropLevel} disabled={form.levels.length <= 1}>− Level</button>
           <button className="btn" onClick={save} disabled={busy}><ICON.check size={12} />{busy ? '...' : 'Lưu chain'}</button>
         </div>
+      </div>
+
+      <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+        <h2 style={{ fontSize: 13, margin: '0 0 10px' }}>Cơ cấu bộ phận (cây — chain kế thừa từ dưới lên)</h2>
+        {departments.length === 0 ? <div className="empty">Chưa có bộ phận</div> : (
+          <table>
+            <thead><tr><th>Bộ phận</th><th>Thuộc</th></tr></thead>
+            <tbody>
+              {departments.map(d => (
+                <tr key={d.id}>
+                  <td>{deptLabel(d)}</td>
+                  <td>
+                    <select value={d.parent_id || ''} onChange={e => setDeptParent(d.id, e.target.value)}>
+                      <option value="">— gốc —</option>
+                      {departments.filter(x => x.id !== d.id).map(x => <option key={x.id} value={x.id}>{x.code}</option>)}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       <div className="card" style={{ padding: 16 }}>

@@ -26,8 +26,14 @@ async function insertNotification(db, tenantId, userId, title, body, projectId, 
   // Schema thật: notifications có project_id, resource_type, resource_id (KHÔNG có link, is_read)
   await db.prepare(
     `INSERT INTO notifications (tenant_id, user_id, project_id, channel, delivery_status, severity, title, body, resource_type, resource_id, created_at)
-     VALUES ($1, $2, $3, 'in_app', 'pending', $4, $5, $6, $7, $8, now())`
-  ).runAsync(tenantId, userId, projectId || null, severity, title, body, resourceType, resourceId);
+     VALUES ($1, $2, $3, 'in_app', 'pending', $4, $5, $6, $7, $8, now()) RETURNING id`
+  ).runAsync(tenantId, userId, projectId || null, severity, title, body, resourceType, resourceId).then(async (info) => {
+    // Realtime fan-out (Wave D3): TVGS path writes directly, not via notify().
+    try {
+      const { publish } = await import('../lib/events.js');
+      publish(userId, { type: 'notification.created', id: info.lastInsertRowid, severity, title, resource_type: resourceType, resource_id: resourceId, project_id: projectId || null });
+    } catch {}
+  });
 }
 
 export async function runTvgsEscalation() {
@@ -103,6 +109,15 @@ export async function runTvgsEscalation() {
       // 4. Mark escalated
       await db.prepare(`UPDATE material_submittals SET escalated_at = now() WHERE id = $1`).runAsync(sub.id);
 
+      // 5. Webhook fan-out (Wave D4): overdue events for subscribed endpoints.
+      try {
+        const { emitWebhook } = await import('../lib/erp-webhook.js');
+        await emitWebhook(sub.project_tenant_id, 'submittal.overdue', {
+          submittal_id: sub.id, submittal_code: sub.submittal_code,
+          project_id: sub.project_id, days_late: daysLate,
+        });
+      } catch {}
+
       escalated.push({
         id: sub.id,
         submittal_code: sub.submittal_code,
@@ -155,6 +170,17 @@ router.post('/erp-push', requireRole('admin', 'ceo', 'accounting'), async (req, 
     return res.status(403).json({ error: `Plan '${ent.plan}' lacks feature 'erp-export'` });
   }
   try {
+    const { getDb } = await import('../db/index.js');
+    const db = getDb();
+    const profile = await db.prepare('SELECT connector FROM erp_profiles WHERE id = ? AND tenant_id = ?').getAsync(profile_id, req.user.tenant_id);
+    if (!profile) return res.status(404).json({ error: 'ERP profile not found' });
+    if (profile.connector === 'fast') {
+      const { pushFastPRs } = await import('../lib/erp-fast.js');
+      return res.json(await pushFastPRs({ tenantId: req.user.tenant_id, profileId: profile_id }));
+    }
+    if (profile.connector === 'webhook') {
+      return res.status(422).json({ error: 'webhook profiles push via events, not this endpoint (see /api/erp/webhooks/test)' });
+    }
     const { pushLedger } = await import('../lib/erp-push.js');
     res.json(await pushLedger({ tenantId: req.user.tenant_id, profileId: profile_id, projectId: project_id }));
   } catch (e) {

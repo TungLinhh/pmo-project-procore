@@ -13,7 +13,7 @@ import { requireFeature } from '../lib/entitlements.js';
 import { getDb } from '../db/index.js';
 import { withAudit } from '../lib/with-audit.js';
 import { stageFile } from '../lib/stage.js';
-import { getFilePath } from '../lib/storage.js';
+import { storage } from '../lib/storage.js';
 import { parseBimFile, BIM_CAPS } from '../lib/bim-parse.js';
 import { UPLOAD_STATUS } from '../lib/upload-status.js';
 
@@ -60,7 +60,7 @@ router.post('/projects/:id/bim/models', requireRole('admin', 'ceo', 'pm', 'site'
       buffer: req.file.buffer, originalname: req.file.originalname, mimetype: 'application/x-step',
       projectId: pid, zoneId, docType: 'bim_model', tenantId: req.user.tenant_id,
     });
-    const meta = await parseBimFile(getFilePath(staged.key));
+    const meta = await storage.withTempFile(staged.key, (fullPath) => parseBimFile(fullPath));
     const row = await withAudit(req, {
       action: 'CREATE', resourceType: 'bim_model', resourceId: 0,
       context: { project_id: pid, upload_id: staged.upload_id },

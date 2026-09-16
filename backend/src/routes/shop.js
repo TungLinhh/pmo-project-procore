@@ -164,6 +164,8 @@ router.post('/:id/transition', async (req, res) => {
       );
       return r.rows[0];
     });
+    const { emitDecision } = await import('../lib/events.js');
+    await emitDecision(db, req.user.tenant_id, { kind: 'shop_drawing', id, label: old.drawing_code, decision: to_status, projectId: old.project_id });
     res.json(result);
   } catch (e) {
     console.error('[shop transition]', req.params.id, '→', to_status, '|', e.message);
@@ -240,6 +242,10 @@ router.post('/:id/approve-level', async (req, res) => {
       );
       return r.rows[0];
     });
+    if (newStatus === 'APPROVED' || newStatus === 'REJECTED') {
+      const { emitDecision } = await import('../lib/events.js');
+      await emitDecision(db, req.user.tenant_id, { kind: 'shop_drawing', id, label: old.drawing_code, decision: newStatus, projectId: old.project_id });
+    }
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });

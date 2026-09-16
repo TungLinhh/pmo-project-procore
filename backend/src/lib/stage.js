@@ -10,7 +10,7 @@ export async function stageFile(db, {
 } = {}) {
   if (!buffer?.length) throw new Error('Empty file buffer');
   if (tenantId == null) throw new Error('stageFile: tenantId required');
-  const saved = saveFile(buffer, originalFilename(originalname));
+  const saved = await saveFile(buffer, originalFilename(originalname));
   const row = await db.prepare(`
     INSERT INTO file_uploads (tenant_id, project_id, zone_id, original_filename, relative_path, storage_key, file_size, file_hash, mime_type, expected_doc_type, status, skip_reason)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

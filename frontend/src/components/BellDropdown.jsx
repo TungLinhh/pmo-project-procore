@@ -48,8 +48,32 @@ export default function BellDropdown() {
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, 30000);  // refresh 30s
-    return () => clearInterval(interval);
+    const interval = setInterval(load, 30000);  // fallback poll (SSE primary below)
+    // Realtime (Wave D3): EventSource push → instant reload. After 3 consecutive
+    // errors the poll above is all that remains (graceful degradation).
+    let es = null;
+    let failures = 0;
+    try {
+      const token = localStorage.getItem('pmo_token');
+      if (token && typeof EventSource !== 'undefined') {
+        es = new EventSource('/api/stream?token=' + encodeURIComponent(token));
+        // Server sends NAMED events (notification.created, approval.decided,
+        // compression.applied) — onmessage alone never fires for those.
+        const refresh = () => load();
+        es.addEventListener('notification.created', refresh);
+        es.addEventListener('approval.decided', refresh);
+        es.addEventListener('compression.applied', refresh);
+        es.onmessage = refresh; // unnamed fallback
+        es.onerror = () => {
+          failures++;
+          if (failures >= 3 && es) { es.close(); es = null; }
+        };
+      }
+    } catch { /* SSE unsupported — poll covers it */ }
+    return () => {
+      clearInterval(interval);
+      if (es) es.close();
+    };
   }, [load]);
 
   useEffect(() => {

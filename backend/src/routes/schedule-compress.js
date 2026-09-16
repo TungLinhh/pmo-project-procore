@@ -219,6 +219,12 @@ router.post('/schedule-scenarios/:id/apply', ...ENTERPRISE, async (req, res) => 
       );
       return { scenario: r.rows[0], changed: changes.length, days_saved: out.days_saved, calendar_end: out.calendar_end };
     });
+    const { emitDecision } = await import('../lib/events.js');
+    await emitDecision(db, req.user.tenant_id, { kind: 'compression', id: Number(sc.id), label: sc.name, decision: 'APPLIED', projectId: sc.project_id });
+    const { emitWebhook } = await import('../lib/erp-webhook.js');
+    await emitWebhook(req.user.tenant_id, 'compression.applied', {
+      scenario_id: Number(sc.id), project_id: sc.project_id, changed_items: changes.length,
+    });
     res.json(result);
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });

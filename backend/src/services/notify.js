@@ -124,6 +124,19 @@ export async function notify(options) {
     }
   }
 
+  // 4. realtime fan-out (Wave D3): best-effort, never throws into callers.
+  if (results.in_app?.ok) {
+    try {
+      const { publish } = await import('../lib/events.js');
+      publish(userId, {
+        type: 'notification.created',
+        id: results.in_app.id, severity, title,
+        resource_type: resourceType || null, resource_id: resourceId || null,
+        project_id: projectId || null,
+      });
+    } catch {}
+  }
+
   return results;
 }
 

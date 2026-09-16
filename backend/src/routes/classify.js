@@ -8,7 +8,7 @@ import { requireAuth } from '../lib/auth.js';
 import { permissionMiddleware } from '../lib/permission-middleware.js';
 import { getDb } from '../db/index.js';
 import { classifyFile, probeWorkbook } from '../lib/classify.js';
-import { getFilePath } from '../lib/storage.js';
+import { storage } from '../lib/storage.js';
 import { UPLOAD_STATUS } from '../lib/upload-status.js';
 import { readRollupPercents, crossCheckProject, compareRollup } from '../lib/crosscheck.js';
 
@@ -30,7 +30,7 @@ router.post('/classify', async (req, res) => {
     let probe = null;
     if (u.storage_key) {
       try {
-        probe = await probeWorkbook(getFilePath(u.storage_key));
+        probe = await storage.withTempFile(u.storage_key, (fullPath) => probeWorkbook(fullPath));
       } catch (e) {
         probe = { locked: false, sheets: [], empty: false, probe_error: e.message };
       }
@@ -85,7 +85,7 @@ router.post('/:id/crosscheck', async (req, res) => {
     ? (fam === 'schedule' ? 'schedule' : 'shop')
     : kind;
   if (!['shop', 'schedule'].includes(resolvedKind)) return res.status(400).json({ error: 'kind must be shop|schedule' });
-  const rollup = await readRollupPercents(getFilePath(upload.storage_key));
+  const rollup = await storage.withTempFile(upload.storage_key, (fullPath) => readRollupPercents(fullPath));
   const agg = await crossCheckProject(db, project_id, resolvedKind);
   const rows = compareRollup(rollup.rows, agg, Number(tolerance) || 20);
   const checked = rows.filter(r => r.ok !== null);

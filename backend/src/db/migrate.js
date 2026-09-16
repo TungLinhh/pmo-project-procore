@@ -13,7 +13,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 export function orderedMigrationFiles(files) {
-  const rank = (f) => (f === '9999_add_issues_table.sql' ? 1 : f === '9998_align_schema_with_routes.sql' ? 2 : f === '9999b_tenant_rls.sql' ? 3 : f === '9999c_fix_rls_hatch.sql' ? 4 : f === '9999d_schedule_links.sql' ? 5 : f === '9999e_schedule_scenarios.sql' ? 6 : f === '9999f_site_holidays.sql' ? 7 : f === '9999g_ai_foundation.sql' ? 8 : f === '9999h_app_role.sql' ? 9 : f === '9999i_password_flag.sql' ? 10 : f === '9999j_erp_push.sql' ? 11 : 0);
+  const rank = (f) => (f === '9999_add_issues_table.sql' ? 1 : f === '9998_align_schema_with_routes.sql' ? 2 : f === '9999b_tenant_rls.sql' ? 3 : f === '9999c_fix_rls_hatch.sql' ? 4 : f === '9999d_schedule_links.sql' ? 5 : f === '9999e_schedule_scenarios.sql' ? 6 : f === '9999f_site_holidays.sql' ? 7 : f === '9999g_ai_foundation.sql' ? 8 : f === '9999h_app_role.sql' ? 9 : f === '9999i_password_flag.sql' ? 10 : f === '9999j_erp_push.sql' ? 11 : f === '9999k_nested_departments.sql' ? 12 : f === '9999l_erp_connectors.sql' ? 13 : f === '9999m_erp_nullable.sql' ? 14 : 0);
   return [...files].sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
@@ -69,6 +69,12 @@ export async function runMigrations(db, drizzleDir) {
   let ran = 0, skipped = 0;
   for (const f of files) {
     const sql = readFileSync(join(drizzleDir, f), 'utf8');
+    // SQL has no // comments — a stray one fails at apply time with a cryptic
+    // error. Fail here instead, naming the file and line (3 strikes in v0.9.0).
+    const badLine = sql.split('\n').findIndex((l) => /^\s*\/\//.test(l));
+    if (badLine >= 0) {
+      throw new Error(`Bad SQL comment in ${f}:${badLine + 1} — use -- not //`);
+    }
     const sum = checksumOf(sql);
     if (applied.has(f)) {
       if (applied.get(f) !== sum) {

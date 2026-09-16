@@ -1,0 +1,39 @@
+// Realtime stream (Wave D3): GET /api/stream (SSE, query-token auth).
+// EventSource cannot set headers → ?token= validated by the same verifyAccess
+// (short-lived accept: any valid access token; no new token type in v1).
+// Mount: /api/stream (before the SPA fallback!). Heartbeat 25s, no buffering.
+import { Router } from 'express';
+import { verifyAccess } from '../lib/auth.js';
+import { subscribe, subscriberCount } from '../lib/events.js';
+
+const router = Router({ mergeParams: true });
+
+router.get('/', async (req, res) => {
+  const user = await verifyAccess(req.query.token);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write(`event: hello\ndata: {"user_id":${user.id}}\n\n`);
+  const drop = subscribe(user.id, res);
+  const beat = setInterval(() => {
+    try { res.write(`:beat\n\n`); } catch {}
+  }, 25000);
+  req.on('close', () => {
+    clearInterval(beat);
+    drop();
+  });
+});
+
+// Debug surface (admin/CEO): who's listening right now.
+router.get('/status', async (req, res) => {
+  const { requireAuth, requireRole } = await import('../lib/auth.js');
+  return requireAuth(req, res, () => requireRole('admin', 'ceo')(req, res, () => {
+    res.json({ subscribers: subscriberCount() });
+  }));
+});
+
+export default router;

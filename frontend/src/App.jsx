@@ -1,6 +1,6 @@
 // Router root - 2 shells (HQ + Field) + Login
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, lazy, Suspense } from 'react';
 import Login from './components/Login.jsx';
 import HqShell from './components/HqShell.jsx';
 import ToastContainer from './components/Toast.jsx';
@@ -19,6 +19,8 @@ import Manpower from './hq/Manpower.jsx';
 import Payment from './hq/Payment.jsx';
 import Assistant from './hq/Assistant.jsx';
 import BimLibrary from './hq/BimLibrary.jsx';
+// BIM viewer lazy: three + web-ifc (~1MB) must never join the main bundle.
+const BimViewer = lazy(() => import('./hq/BimViewer.jsx'));
 import OTDPage from './hq/OTDPage.jsx';
 import OTDPage_css from './hq/OTDPage.css?inline';
 import { ICON } from './icons.jsx';
@@ -102,6 +104,7 @@ export default function App() {
           <Route path="approval-chains" element={<ChainConfig />} />
           <Route path="assistant" element={<Assistant />} />
           <Route path="bim" element={<BimLibrary />} />
+          <Route path="bim/:uploadId" element={<Suspense fallback={<div className="empty">Đang tải viewer 3D...</div>}><BimViewer /></Suspense>} />
           <Route path="ai-config" element={<AiConfig />} />
           <Route path="audit" element={<AuditLog />} />
           <Route path="otd" element={<OTDPage />} />

@@ -8,7 +8,7 @@ import { permissionMiddleware } from '../lib/permission-middleware.js';
 import { requireProjectAccess, requireResourceProject } from '../lib/project-access.js';
 import { getDb } from '../db/index.js';
 import { withAudit } from '../lib/with-audit.js';
-import { saveFile, getFilePath, fileExists } from '../lib/storage.js';
+import { saveFile, storage } from '../lib/storage.js';
 import { join } from 'node:path';
 
 const router = Router({ mergeParams: true });
@@ -102,7 +102,7 @@ router.post('/daily-reports/:id/photos', upload.array('photos', 20), async (req,
       note: `Upload ${req.files.length} ảnh vào daily report ${req.params.id}`,
     }, async (client) => {
       for (const f of req.files) {
-        const saved = saveFile(f.buffer, f.originalname, f.mimetype);
+        const saved = await saveFile(f.buffer, f.originalname, f.mimetype);
         const ins = await client.query(
           `INSERT INTO daily_photos (daily_report_id, file_path, file_name, mime_type, file_size, uploaded_by, uploaded_at) VALUES ($1, $2, $3, $4, $5, $6, now()) RETURNING *`,
           [req.params.id, saved.key, f.originalname, f.mimetype, f.size, req.user.id]
@@ -128,9 +128,8 @@ router.get('/daily-reports/photos/:photoId/download', async (req, res) => {
   const db = getDb();
   const row = await db.prepare('SELECT id, file_path, file_name, mime_type FROM daily_photos WHERE id = ?').getAsync(req.params.photoId);
   if (!row) return res.status(404).json({ error: 'Photo not found' });
-  const fullPath = getFilePath(row.file_path);
-  if (!fileExists(row.file_path)) return res.status(404).json({ error: 'File missing from disk' });
-  res.download(fullPath, row.file_name || `photo-${row.id}`);
+  if (!(await fileExists(row.file_path))) return res.status(404).json({ error: 'File missing from storage' });
+  await storage.download(res, row.file_path, row.file_name || `photo-${row.id}`);
 });
 
 // Cross-project manpower rollup (week / month)

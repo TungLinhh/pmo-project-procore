@@ -5,7 +5,7 @@ import multer from 'multer';
 import { requireAuth } from '../lib/auth.js';
 import { permissionMiddleware } from '../lib/permission-middleware.js';
 import { getDb } from '../db/index.js';
-import { getFilePath, fileExists } from '../lib/storage.js';
+import { storage } from '../lib/storage.js';
 import { detectDocType } from '../lib/excel.js';
 import { findOrCreateProject, findOrCreateZone } from '../services/ingest/index.js';
 import { ingestProjectLevel } from '../services/ingest/project_level.js';
@@ -45,7 +45,7 @@ router.post('/', upload.single('file'), async (req, res) => {
         message: 'Staged without project. Configure via POST /api/upload/:id/configure or the batch review queue.',
       });
     }
-    const result = await ingestProjectLevel(getFilePath(staged.key), project.id, { docType, uploadId: staged.upload_id });
+    const result = await storage.withTempFile(staged.key, (fullPath) => ingestProjectLevel(fullPath, project.id, { docType, uploadId: staged.upload_id }));
     const totalRows = (result.ok || 0) + (result.errors || 0);
     const status = statusFromCounts(result.ok, result.errors);
     await db.prepare(
@@ -108,9 +108,8 @@ router.get('/:id/download', async (req, res) => {
   const row = await db.prepare('SELECT id, original_filename, storage_key, mime_type, skip_reason FROM file_uploads WHERE id = ?').getAsync(id);
   if (!row) return res.status(404).json({ error: 'Upload not found' });
   if (!row.storage_key) return res.status(404).json({ error: row.skip_reason || 'No file content for this upload' });
-  const fullPath = getFilePath(row.storage_key);
-  if (!fileExists(row.storage_key)) return res.status(404).json({ error: 'File missing from disk' });
-  res.download(fullPath, row.original_filename || `upload-${row.id}.xlsx`);
+  if (!(await storage.exists(row.storage_key))) return res.status(404).json({ error: 'File missing from storage' });
+  await storage.download(res, row.storage_key, row.original_filename || `upload-${row.id}.xlsx`);
 });
 
 export default router;

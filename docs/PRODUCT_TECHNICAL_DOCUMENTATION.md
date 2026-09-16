@@ -1,6 +1,6 @@
 # PMO MVP — Product Technical Documentation
 
-> **Version**: 0.9.0 · **Last updated**: 2026-09-15 · **Audience**: Engineers, technical PMs, integrators
+> **Version**: 0.10.0 · **Last updated**: 2026-09-16 · **Audience**: Engineers, technical PMs, integrators
 >
 > This document is the **single source of truth** for the PMO MVP. It replaces the previous collection of scattered docs (ARCHITECTURE, CODEBASE, USER_GUIDE, OPERATIONS, etc.). UML diagrams referenced from `docs/srs/`.
 
@@ -281,6 +281,9 @@ Located in `backend/drizzle/`, applied **exactly once** via the `schema_migratio
 | `9999h_app_role.sql` | Least-privilege `pmo_app` role + grants + default privileges (rank 9; needs CREATEROLE once — see §3.6) |
 | `9999i_password_flag.sql` | `users.must_change_password` (rank 10) |
 | `9999j_erp_push.sql` | `erp_profiles` + `erp_push_log` + RLS (rank 11) |
+| `9999k_nested_departments.sql` | `departments.parent_id` + index (rank 12) |
+| `9999l_erp_connectors.sql` | `connector` + `config` on profiles (rank 13) |
+| `9999m_erp_nullable.sql` | sftp_* NULL-able for non-sftp connectors (rank 14) |
 | `9991_project_members.sql` | Membership seam (HBG-only backfill) |
 | `9992_auth_session.sql` | Refresh tokens + denylist |
 | `9993_auth_password.sql` | `password_hash` (bcrypt) |
@@ -1385,6 +1388,7 @@ docker compose restart backend
 | 2026-09-15 | AI layer v0.7.0 | pgvector (source-built) + template1 provisioning, switchable providers (env keys + DB routing), semantic index + scoped retrieval, assistant panel + SLA watcher drafts, cost caps, ai-assistant suite | (this commit) |
 | 2026-09-15 | Wave 2 v0.8.0 | Least-privilege pmo_app + owner pool split, password rotation + login gate, offline enqueue + field outbox, db-role/password-rotation/field-offline suites | (this commit) |
 | 2026-09-15 | Wave 3 v0.9.0 | BIM store-only library (IFC metadata, zone linking) + ERP round-trip (AP CSV export, vendor match, SFTP push), bim-intake/erp-roundtrip/project-list-roles suites | (this commit) |
+| 2026-09-16 | Remainder v0.10.0 | S3 driver (MinIO-first) + storage seam async, nested departments + bottom-up chains, SSE realtime + Bell hook, FAST client + signed webhooks, three.js BIM viewer (lazy chunk) | (this commit) |
 
 ### 16.1 Known limitations (v0.8.0)
 
@@ -1397,14 +1401,22 @@ docker compose restart backend
 7. **Flat departments** — no nesting (`parent_id` deferred)
 8. **Photos stay online** — offline outbox covers scalar edits only
 
-### 16.2 Roadmap (suggested)
+### 16.2 Remainder notes (v0.10.0)
 
-- v0.5: per-user passwords UI + rate limiting review + audit prune
-- v0.6: WebSocket / SSE for real-time notifications
-- v0.7: S3 driver for uploads + AI image storage
-- v0.8: nested departments + multi-tenant admin
-- v0.9: offline enqueue endpoint for field app
-- v1.0: Gantt auto-scheduling + BIM viewer
+- **Storage**: seam is async (`withTempFile`/`download`/`stat`/`readBuffer`); parsers take temp paths, downloads redirect (S3) or stream (local). `getFilePath` is local-only legacy.
+- **Realtime**: `/api/stream` mounts FIRST (bare `/api` routers run header-only requireAuth on every subpath and would 401 the query-token handshake). Events: notification.created (all notify paths + TVGS), approval.decided + compression.applied (tenant admins).
+- **BIM viewer**: `SetWasmPath` appends bare names — must pass a custom `locateFile` returning the hashed `?url` asset. `FlatMesh.geometries` is an Emscripten Vector (size/get), not iterable.
+- **Migrations**: SQL files reject `//` comments at runner level (3 strikes in v0.9.0); connector columns documented per rank above.
+
+### 16.3 Roadmap (current)
+
+Shipped out of order vs the original sketch — this is the honest remainder:
+- Real MinIO run (compose service exists; checklist untested against live MinIO)
+- Multi-tenant admin UI (provisioning is script-only)
+- ERP auto-cron + per-customer FAST path tuning
+- Viewer measurements / storey isolation (spatial query)
+- S3 migration for the existing 560MB local disk
+- Audit retention policy (table still small)
 
 ---
 

@@ -96,7 +96,7 @@ const ROUTE_MODULE_MAP = [
   { method: 'GET', pattern: /^\/api\/jobs\//, module: 'approval', action: 'read' },
   { method: 'POST', pattern: /^\/api\/jobs\//, module: 'approval', action: 'write' },
   { method: 'GET', pattern: /^\/api\/master-data\//, module: 'master_data', action: 'read' },
-  { method: 'POST', pattern: /^\/api\/master-data\//, module: 'master_data', action: 'write' },
+  { method: 'POST|PATCH', pattern: /^\/api\/master-data\//, module: 'master_data', action: 'write' },
   { method: 'GET', pattern: /^\/api\/business-process\//, module: 'master_data', action: 'read' },
   { method: 'GET', pattern: /^\/api\/kpi/, module: 'kpi', action: 'read' },
   { method: 'POST|PUT', pattern: /^\/api\/kpi/, module: 'kpi', action: 'write' },

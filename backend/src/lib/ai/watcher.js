@@ -63,6 +63,13 @@ export async function runAiSlaWatch({ maxDrafts = 20 } = {}) {
             resource_type: 'material_submittal', resource_id: sub.id,
             severity: 'warning', provider: r.provider, model: r.model,
           }));
+        // Webhook fan-out (Wave D4): draft created (human still approves).
+        try {
+          const { emitWebhook } = await import('../erp-webhook.js');
+          await emitWebhook(tenant_id, 'ai_draft.created', {
+            kind: 'sla_nudge', submittal_id: sub.id, project_id: sub.project_id,
+          });
+        } catch {}
         drafted.push({ submittal_id: sub.id, submittal_code: sub.submittal_code, days_late: daysLate });
       } catch (e) {
         console.error(`[ai-watch] submittal ${sub.id}:`, e.message);

@@ -48,6 +48,7 @@ import aiAssistantRouter from './routes/ai-assistant.js';
 import bimRouter from './routes/bim.js';
 import exportRouter from './routes/export.js';
 import erpRouter from './routes/erp.js';
+import streamRouter from './routes/stream.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -73,6 +74,10 @@ app.get('/api/health', async (req, res) => {
 // ============ Mount routers ============
 // Order matters: more-specific mounts phải mount TRƯỚC more-general.
 // /api/projects/:id/kpi-targets phải trước /api/projects
+// /api/stream FIRST of all: bare `app.use('/api', …)` routers run requireAuth
+// (header-only) on every subpath, which would 401 the query-token SSE handshake
+// before streamRouter is ever reached (Wave D3 lesson).
+app.use('/api/stream', streamRouter);                       // SSE realtime (Wave D3)
 app.use('/api/auth', authRouter);
 app.use('/api/me', meRouter);
 app.use('/api/projects/:id/kpi-targets', kpiRouter);          // /api/projects/:id/kpi-targets (GET list, POST, GET history)

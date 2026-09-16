@@ -11,7 +11,7 @@
 import { getDb } from '../db/index.js';
 import { requireAuth } from '../lib/auth.js';
 import { UPLOAD_STATUS, statusFromCounts } from '../lib/upload-status.js';
-import { getFilePath, fileExists } from '../lib/storage.js';
+import { fileExists, storage } from '../lib/storage.js';
 import { listSheets, detectDocType } from '../lib/excel.js';
 import { findOrCreateProject, findOrCreateZone, INGESTORS } from '../services/ingest/index.js';
 import { checkProjectAccess } from '../lib/project-access.js';
@@ -62,7 +62,7 @@ export function registerWizardRoutes(app) {
 
     const upload = await db.prepare('SELECT * FROM file_uploads WHERE id = ?').getAsync(uploadId);
     if (!upload) return res.status(404).json({ error: 'Upload not found' });
-    if (!fileExists(upload.storage_key)) return res.status(404).json({ error: 'File not found on disk' });
+    if (!(await fileExists(upload.storage_key))) return res.status(404).json({ error: 'File not found in storage' });
 
     // Resolve project
     let project = null;
@@ -106,12 +106,11 @@ export function registerWizardRoutes(app) {
       WHERE id = ?
     `).runAsync(project.id, zoneId, finalDocType, uploadId);
 
-    // Run parse() so user gets preview immediately
-    const fullPath = getFilePath(upload.storage_key);
+    // Run parse() so user gets preview immediately (temp file on S3, zero-copy local)
     const ingestor = INGESTORS[finalDocType];
     const opts = { tenantId: tenantOf(req), projectId: project.id, zoneCode, processCode: process_code };
     try {
-      const parsed = await ingestor.parse(fullPath, opts);
+      const parsed = await storage.withTempFile(upload.storage_key, (fullPath) => ingestor.parse(fullPath, opts));
       // Cache parsed data as JSON in file_uploads.report_json for commit step
       await db.prepare('UPDATE file_uploads SET report_json = ? WHERE id = ?').runAsync(JSON.stringify(parsed), uploadId);
       res.json({
@@ -144,10 +143,9 @@ export function registerWizardRoutes(app) {
       const z = await db.prepare('SELECT code FROM zones WHERE id = ?').getAsync(upload.zone_id);
       zoneCode = z?.code;
     }
-    const fullPath = getFilePath(upload.storage_key);
     const opts = { tenantId: tenantOf(req), projectId: upload.project_id, zoneCode };
     try {
-      const parsed = await ingestor.parse(fullPath, opts);
+      const parsed = await storage.withTempFile(upload.storage_key, (fullPath) => ingestor.parse(fullPath, opts));
       await db.prepare('UPDATE file_uploads SET report_json = ? WHERE id = ?').runAsync(JSON.stringify(parsed), uploadId);
       res.json({
         upload_id: uploadId,

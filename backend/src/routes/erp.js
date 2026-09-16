@@ -20,7 +20,7 @@ router.get('/profiles', async (req, res) => {
   const db = getDb();
   // Secret values never leave env: present only as a boolean.
   const rows = await db.prepare(
-    `SELECT id, name, sftp_host, sftp_port, sftp_user, secret_env, remote_path, enabled, created_at
+    `SELECT id, name, connector, sftp_host, sftp_port, sftp_user, secret_env, remote_path, config, enabled, created_at
      FROM erp_profiles WHERE tenant_id = ? ORDER BY id`
   ).allAsync(req.user.tenant_id);
   res.json(rows);
@@ -28,31 +28,56 @@ router.get('/profiles', async (req, res) => {
 
 router.post('/profiles', async (req, res) => {
   const db = getDb();
-  const { name, sftp_host, sftp_port = 22, sftp_user, secret_env, remote_path } = req.body || {};
-  if (!name || !sftp_host || !sftp_user || !secret_env || !remote_path) {
-    return res.status(400).json({ error: 'name, sftp_host, sftp_user, secret_env, remote_path required' });
-  }
+  const { name, connector = 'sftp', sftp_host, sftp_port = 22, sftp_user, secret_env, remote_path, config = {} } = req.body || {};
+  if (!['sftp', 'fast', 'webhook'].includes(connector)) return res.status(400).json({ error: 'connector must be sftp|fast|webhook' });
+  if (!name || !secret_env) return res.status(400).json({ error: 'name + secret_env required' });
   if (!/^[A-Z][A-Z0-9_]*$/.test(secret_env)) {
     return res.status(400).json({ error: 'secret_env must be an ENV VAR NAME (e.g. ACME_SFTP_PASSWORD)' });
+  }
+  if (connector === 'sftp' && (!sftp_host || !sftp_user || !remote_path)) {
+    return res.status(400).json({ error: 'sftp needs sftp_host, sftp_user, remote_path' });
+  }
+  if (connector === 'webhook') {
+    const url = config?.url;
+    if (!url || !/^https?:\/\//.test(url)) return res.status(400).json({ error: 'webhook needs config.url (http/https)' });
+  }
+  if (connector === 'fast' && !(config?.base_url)) {
+    return res.status(400).json({ error: 'fast needs config.base_url' });
   }
   try {
     const row = await withAudit(req, {
       action: 'CREATE', resourceType: 'erp_profile', resourceId: 0,
-      after: { name, sftp_host, sftp_port, sftp_user, secret_env, remote_path },
-      note: `ERP profile ${name} → ${sftp_user}@${sftp_host}:${remote_path} (secret in ${secret_env})`,
+      after: { name, connector, sftp_host, sftp_port, sftp_user, secret_env, remote_path, config },
+      note: `ERP profile ${name} [${connector}] (secret in ${secret_env})`,
     }, async (client) => {
       const r = await client.query(
-        `INSERT INTO erp_profiles (tenant_id, name, sftp_host, sftp_port, sftp_user, secret_env, remote_path)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (tenant_id, name) DO UPDATE SET sftp_host = EXCLUDED.sftp_host, sftp_port = EXCLUDED.sftp_port,
-           sftp_user = EXCLUDED.sftp_user, secret_env = EXCLUDED.secret_env, remote_path = EXCLUDED.remote_path
-         RETURNING id, name, sftp_host, sftp_port, sftp_user, secret_env, remote_path, enabled, created_at`
-      , [req.user.tenant_id, name, sftp_host, sftp_port, sftp_user, secret_env, remote_path]);
+        `INSERT INTO erp_profiles (tenant_id, name, connector, sftp_host, sftp_port, sftp_user, secret_env, remote_path, config)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (tenant_id, name) DO UPDATE SET connector = EXCLUDED.connector, sftp_host = EXCLUDED.sftp_host,
+           sftp_port = EXCLUDED.sftp_port, sftp_user = EXCLUDED.sftp_user, secret_env = EXCLUDED.secret_env,
+           remote_path = EXCLUDED.remote_path, config = EXCLUDED.config
+         RETURNING id, name, connector, sftp_host, sftp_port, sftp_user, secret_env, remote_path, config, enabled, created_at`
+      , [req.user.tenant_id, name, connector, sftp_host || null, sftp_port, sftp_user || null, secret_env, remote_path || null, JSON.stringify(config || {})]);
       return r.rows[0];
     });
     res.status(201).json(row);
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/erp/webhooks/test {profile_id} — fires a ping event at the sub.
+router.post('/webhooks/test', async (req, res) => {
+  const db = getDb();
+  const { profile_id } = req.body || {};
+  const p = await db.prepare('SELECT * FROM erp_profiles WHERE id = ? AND tenant_id = ?').getAsync(profile_id, req.user.tenant_id);
+  if (!p) return res.status(404).json({ error: 'Not found' });
+  if (p.connector !== 'webhook') return res.status(422).json({ error: 'profile is not a webhook' });
+  try {
+    const { deliverWebhook } = await import('../lib/erp-webhook.js');
+    res.json(await deliverWebhook({ tenantId: req.user.tenant_id, profile: p, event: { type: 'ping', data: { profile: p.name } } }));
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
   }
 });
 
@@ -141,6 +166,34 @@ router.post('/vendors/confirm', requireFeature('erp-export'), requireRole('admin
     res.json(row);
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/erp/fast/vendors?profile_id= — pull vendor tax list (suggest-only;
+// writes go through /erp/vendors/confirm like CSV matches).
+router.get('/fast/vendors', requireRole('admin', 'ceo', 'procurement', 'accounting'), async (req, res) => {
+  const pid = Number(req.query.profile_id);
+  if (!Number.isInteger(pid)) return res.status(400).json({ error: 'profile_id required' });
+  try {
+    const { pullFastVendors } = await import('../lib/erp-fast.js');
+    const db = getDb();
+    const profile = await db.prepare('SELECT * FROM erp_profiles WHERE id = ? AND tenant_id = ?').getAsync(pid, req.user.tenant_id);
+    if (!profile) return res.status(404).json({ error: 'Not found' });
+    const vendors = await pullFastVendors({ tenantId: req.user.tenant_id, profileId: pid });
+    // Attach local matches (same trigram rule as CSV import).
+    const local = await db.prepare('SELECT id, name, tax_id FROM vendors WHERE tenant_id = ?').allAsync(req.user.tenant_id);
+    const out = [];
+    for (const v of vendors) {
+      let best = null;
+      for (const l of local) {
+        const sim = await db.prepare('SELECT similarity(?, ?) AS s').getAsync(v.name, l.name);
+        if (!best || sim.s > best.similarity) best = { vendor_id: l.id, vendor_name: l.name, current_tax_id: l.tax_id, similarity: Number(sim.s.toFixed(3)) };
+      }
+      out.push({ ...v, match: best && best.similarity >= 0.4 ? best : null });
+    }
+    res.json({ count: out.length, vendors: out.slice(0, 200) });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
   }
 });
 

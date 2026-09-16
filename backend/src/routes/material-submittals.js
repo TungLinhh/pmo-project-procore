@@ -101,6 +101,8 @@ router.post('/:id/reject', async (req, res) => {
       );
       return r.rows[0];
     });
+    const { emitDecision } = await import('../lib/events.js');
+    await emitDecision(db, req.user.tenant_id, { kind: 'material_submittal', id: Number(req.params.id), label: old.submittal_code, decision: 'REJECTED', projectId: old.project_id });
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -128,6 +130,8 @@ router.post('/:id/approve', async (req, res) => {
       );
       return r.rows[0];
     });
+    const { emitDecision } = await import('../lib/events.js');
+    await emitDecision(db, req.user.tenant_id, { kind: 'material_submittal', id: Number(req.params.id), label: old.submittal_code, decision: 'APPROVED', projectId: old.project_id });
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });
