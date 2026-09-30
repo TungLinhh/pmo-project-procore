@@ -2072,6 +2072,153 @@ trong một phiên, đều do phép thử âm tính bắt chứ không phải do
 Một lỗi tự chính: `pgrep -f "data/pgdata"` khớp luôn dòng lệnh của chính shell, nên `kill -9`
 giết shell đang chạy lệnh. Phải lấy pid từ **pid file** hoặc dùng mẫu không khớp dòng lệnh.
 
+### 11.30 Đợt 21 — dời lịch demo về hiện tại, và ba lỗi do chính việc dời
+
+Đợt 18 triển khai, đợt 20 vá lớp bền vững. Đợt này là **mục 13** trong
+`docs/DATA_DECISIONS_REQUIRED.md` — mục chặn UAT duy nhất còn lại — và nó không đơn giản
+như tưởng.
+
+#### Sự nhầm ban đầu: dời ngày **không** làm nén lịch khả thi
+
+Tôi mở đầu đợt này với niềm tin rằng dời lịch 2019 → 2026 sẽ khiến nén lịch chạy được.
+Đo thì **không**:
+
+```
+trước khi dời:  đích +30d → feasible=false, calendar_end=2027-06-25
+sau  khi dời:  đích +30d → feasible=false, calendar_end=2027-06-25   ← y hệt
+```
+
+Lý do nằm ở `lib/cpm.js:mapToCalendar`: hạng mục **chưa làm** được dàn lịch ra từ
+`todayStr()`, nên `calendar_end` luôn bằng hôm nay + đường găng còn lại, **không** phụ
+thuộc ngày lưu trong DB. Vậy đây là **hai vấn đề tách biệt** và phải sửa cả hai:
+
+| Vấn đề | Sửa ở đâu |
+|---|---|
+| Mọi báo cáo hiện số của 7 năm trước | `scripts/rebase-demo-dates.mjs` |
+| 422 không nói phải thử đến bao giờ | `routes/schedule-compress.js`: `earliest_feasible_target` |
+
+Đáng ghi: nếu tôi chỉ sửa một và đo bằng "giao diện trông đẹp hơn" thì UAT vẫn đỏ, và
+tôi sẽ báo là xong.
+
+#### `earliest_feasible_target`: đoán một phát là **sai**
+
+Bản đầu trả `calendar_end + 1`. Đo thì ngay:
+
+| mục tiêu | `calendar_end` |
+|---|---|
+| 2026-10-30 | 2027-06-25 |
+| 2027-03-29 | 2027-07-01 |
+
+Mục tiêu **xa hơn** thì lịch tính ra **dài hơn** — vì xa hơn thì nén ít hơn. Nên gợi ý
+`2027-06-26` dùng vào lại **không** khả thi. Đây là bài toán điểm cố định, phải **tìm**:
+quét thô theo bước 15 ngày trong chân trời 900 ngày, rồi nhị phân về độ phân giải một ngày.
+Đo: gợi ý 2027-07-24, dùng vào thật sự `feasible=true`, tìm trong 1,3 giây.
+
+Phụ thuộc cứng phát sinh kèm: ngày nghỉ phải nạp trong **cửa sổ chân trời tìm kiếm**, không
+phải tới mục tiêu đầu vào. Nạp hẹp rồi thử rộng ⇒ các vòng sau dùng thiếu ngày nghỉ ⇒ tính
+ra lịch ngắn hơn thật ⇒ **báo khả thi sai**. Đã tách `calc(target)` thành hàm thuần, không
+đụng DB, nên tìm kiếm không tốn truy vấn nào.
+
+#### Phạm vi dời: rộng hơn nhiều so với "lịch"
+
+Bản đầu tôi chỉ liệt kê 4 bảng gắn `project_id`. Đo `information_schema` ra **19 bảng
+gắn dự án** cộng 4 bảng nối gián tiếp (`schedule_baseline_items` qua `baseline_id`,
+`invoices` qua `contract_id`, `payment_requests` qua `invoice_id`, `daily_work_items` qua
+`daily_report_id`). Dời lịch mà không dời payment/contract thì demo **tự mâu thuẫn**: lịch
+năm 2026 còn hợp đồng ký năm 2019. Tổng cộng 66 207 dòng, trong đó `schedule_baseline_items`
+ một mình đã 63 936 dòng.
+
+#### Ba lỗi trong chính công cụ dời, mỗi lỗi đều bị bắt bằng `--dry-run`
+
+1. **Tính offset từ `max(plan_end_date)` toàn cục.** Dự án thử `PILOT-001` kết thúc
+   2026-10-30, muộn hơn dự án demo 2019–2020 sáu năm ⇒ `max` rơi vào nó ⇒ offset chỉ 60
+   ngày ⇒ lịch demo chỉ dịch từ 2019-05 sang 2019-07. Vẫn cũ, vẫn hỏng. Sửa: chỉ tính trong
+   **nhóm dự án đã cũ**, và mọi `UPDATE` khoanh trong đúng nhóm đó — nếu chỉ sửa phép tính
+   mà không khoanh thì sẽ **kéo cả dự án đang ở 2026** đi 60 ngày, tức phá đúng dữ liệu
+   đang muốn giữ.
+2. **`projects` không có cột `project_id`** (khoá chính của nó là `id`) ⇒ lỗi ngay dòng
+   đầu. Rồi `schedule_baseline_items` **không có cột `id`** nữa ⇒ khoanh bằng `t.id IN (…)`
+   hỏng tiếp. Sửa: `scopeFor(how, ids)` sinh điều kiện theo đúng đường nối của từng bảng.
+3. **`SET` cần `cột = CASE …`**, không phải `CASE` trần. Và thứ tự tham số phải **xen kẽ**
+   theo thứ tự `?` xuất hiện trong SQL (cutoff, offset, cutoff, offset…) — gom hết offset
+   rồi mới tới cutoff cho `bind message supplies N parameters, but prepared statement
+   requires M`.
+
+#### Quy tắc quan trọng nhất của lần này: **chỉ dời ô thật sự đã cũ**
+
+Bản đầu dời mọi ô có giá trị trong nhóm dự án. Đo thấy hai thứ đang ở **hiện tại**:
+
+| Ô | Giá trị | Nếu dời 2504 ngày |
+|---|---|---|
+| `attention_digest_runs.digest_date` | 2026-09-26 → 29 | 2033 ⇒ **cron tưởng hôm nay chưa chạy digest** ⇒ gửi trùng |
+| `projects.end_date` (BTE) | 2027-01-20 | 2033-11-27 ⇒ phá dữ liệu **đang hợp lý** |
+
+Nên công cụ chỉ dời ô còn nằm trong quá khứ, **theo từng cột**, và giữ ô ở hiện tại. Cách
+này tự loại được mọi trường hợp tương tự mà không cần danh sách cấm thủ công — đúng bài học
+"encode rule vào cấu trúc, đừng ghi vào danh sách".
+
+#### Hệ quả ngoài dự kiến: thêm bảng làm **hỏng sao lưu**
+
+Thêm `demo_date_rebase` xong thì `POST /api/admin/backups/run` trả **500**:
+`permission denied for table demo_date_rebase`. Nguyên nhân: `ALTER DEFAULT PRIVILEGES`
+trong `deploy/production/00-backup-role.sh` chỉ phủ object tạo **sau** nó **bởi đúng role
+đã đặt**; migration chạy bằng `pmo_user` còn script thường chạy bằng `vutun` ⇒ bảng mới
+tạo bởi `pmo_user` không được phủ. Script đã cảnh báo đúng nguyên nhân bằng comment nhưng
+không **chặn** được.
+
+Sửa: `init.js` cấp lại `GRANT SELECT` cho `pmo_backup` trên toàn bảng/sequence **sau mỗi
+lần migrate**, và chỉ khi role tồn tại. Rẻ, và tự phục hồi.
+
+`backup.mjs` trước đó **không** bắt được lớp lỗi này vì bảng mới không có dòng dữ liệu
+nên `pg_dump` không đọc tới nó. Nay bài kiểm kiểm **quyền** trực tiếp — thứ phụ thuộc vào
+*số bảng*, không phụ thuộc vào *số dòng*.
+
+#### Hai bài kiểm tự báo sai, phát hiện bằng phép thử âm tính
+
+- `backup.mjs`: tôi gọi `ok(!unreadable, …)` trong khi `ok`/`ng` của file này là **hàm ghi
+  log** `(name, detail)`, không phải khẳng định ⇒ **luôn in PASS**. Âm tính bằng cách
+  `REVOKE` rồi chạy: vẫn `PASS — false: … thiếu: demo_date_rebase`. Đây là lần thứ tư
+  trong hai đợt gặp kiểm không thể thất bại; lần nào cũng do phép thử âm tính bắt.
+- `backup.mjs`: `has_sequence_privilege` ném `pg_toast_24682 is not a sequence`. Nguyên
+  nhân **không** phải truy vấn sai: **thứ tự đánh giá điều kiện trong Postgres không được
+  bảo đảm**, nên hàm được gọi trên dòng mà `nspname='public'` sẽ loại. Viết subquery
+  trong `FROM` **không** đủ — Postgres **rút phẳng** (subquery pull-up) subquery đơn giản
+  và nhét điều kiện lọc ngược vào `WHERE`. Chỉ `WITH … AS MATERIALIZED` mới chặn được.
+  Và overload 3 tham số phải đặt **user trước**: `has_sequence_privilege(user, seq, priv)`.
+
+#### `secrets-hygiene` chỉ bắt đầu có tác dụng **sau khi commit`
+
+Commit xong thì bài này đỏ: nó quét `git ls-files`, mà trước đó chính nó
+(`tests/e2e/secrets-hygiene.mjs`) và `docs/SECRET_ROTATION_RUNBOOK.md` **chưa được track**
+nên không bị thấy. Sau khi track, cả hai bị báo vì chứa tiền tố `sk-or-v1-` trong **văn
+xuôi**.
+
+Đây đúng là bài học đã ghi ở đợt 15: *bằng chứng chỉ đúng tại thời điểm nó được đo*. Ở đây
+thêm một nghịch lý: **không sửa thì bài kiểm không bao giờ được commit**, mà bài kiểm nằm
+ngoài repo thì không kiểm được gì trong CI. Sửa bằng cách phân biệt *khoá thật* với *mẫu
+phát hiện*: đòi **≥32 ký tự khoá vật liệu** liên tiếp ngay sau tiền tố, và loại trừ dấu
+`…`/`...`. Thử âm tính: dán khoá 48 ký tự hex thật vào file được track ⇒ báo đỏ đúng.
+
+#### Lỗi dữ liệu phát sinh: 25 hạng mục kết thúc trước khi bắt đầu
+
+`plan_end_date = plan_start_date − 1 ngày`, toàn bộ 25 hạng mục ở nhóm "Hệ thống cấp thoát
+nước". Dời hằng số **không thể** tạo ra, nên đây là lỗi dữ liệu nguồn. Cột
+`plan_duration_days` không dùng làm chuẩn được: chỉ **14/716** dòng khớp khoảng ngày, nó
+gần như độc lập với ngày. Sửa bằng cờ riêng `--fix-inverted` (tách khỏi dịch ngày vì đây là
+sửa **ngữ nghĩa dữ liệu**, không phải dịch) thành hạng 1 ngày; chạy lại báo 0 nên
+idempotent.
+
+#### Bài kiểm
+
+`tests/e2e/demo-dates-relative.mjs` (146 bài). Nó kiểm 5 nhóm: lịch nằm quanh hiện tại;
+chạy lại không trôi; thời lượng bất biến và không hạng mục nào đảo; ô vốn ở hiện tại không
+bị đụng; và nén lịch có chỉ đường.
+
+Trong lúc viết, bài này bắt được 2 lỗi của chính nó: lát cắt hàm sai ranh giới (cắt tới
+hàm nằm **trước** ⇒ lát cắt rỗng ⇒ luôn xanh) và `JSON.stringify(sql)` + `bash -c` biến
+newline thành chữ `\n` mà `psql` không hiểu. Sửa bằng cách truyền **mảng tham số** cho
+`execFileSync` — không còn lớp trích dẫn nào để sai.
+
 ### 12.1 Đã xác minh bằng đọc mã, CHƯA sửa — nên sửa trước khi lên máy thật
 
 > ℹ️ Bảng này **đã cũ một phần**: 5 mục từng nằm đây đã được sửa ở đợt 14 và kiểm lại

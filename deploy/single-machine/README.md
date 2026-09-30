@@ -84,6 +84,38 @@ Vì sao `PRODUCTION_ENFORCE_READINESS=0`: cờ đó làm backend **từ chối b
 readiness mức `fail`. Bật lên bây giờ thì dịch vụ không dậy nổi. Nó chỉ nên bật **sau khi**
 đóng #1–#3, tức khi checklist trở thành rào chắn thật chứ không phải trang trí.
 
+## Lịch demo là TƯƠNG ĐỐI với ngày chạy
+
+Dữ liệu demo lấy từ hồ sơ BTE thật, nên lịch gốc nằm ở 2019-03 → 2020-02. Để demo nhìn
+như công trình **đang chạy**, `scripts/rebase-demo-dates.mjs` dời **một hằng số** mọi cột
+ngày gắn dự án (23 bảng, 66 207 dòng). Dời hằng số nên **mọi khoảng cách giữ nguyên** —
+một khoản phải trả sau 30 ngày vẫn là 30 ngày — chỉ có vị trí tuyệt đối thay đổi.
+
+Offset được **ghim** trong bảng `demo_date_rebase`, nên chạy lại không trôi ngày. Đo được:
+`BTE-WP4-HBC` 2019-03-13 → 2020-02-20 trở thành 2026-01-19 → 2026-12-29; thời lượng trung
+bình giữ nguyên 22,2 ngày.
+
+```bash
+node scripts/rebase-demo-dates.mjs --dry-run       # xem kế hoạch, không ghi
+node scripts/rebase-demo-dates.mjs --fix-inverted  # chuẩn hoá khoảng bị đảo (end < start)
+node scripts/rebase-demo-dates.mjs --reset         # hoàn tác về lịch gốc
+TAIL_DAYS=180 node scripts/rebase-demo-dates.mjs   # muốn dự án kéo dài hơn (mặc định 90)
+```
+
+Hai điều **không** dời, có chủ đích:
+
+- **Ô đang ở hiện tại.** `attention_digest_runs.digest_date` (lịch sử cron) và
+  `projects.end_date` của BTE đã là 2026/2027. Dời 2504 ngày là chúng thành 2033 ⇒ cron
+  tưởng hôm nay chưa chạy digest. Công cụ chỉ dời ô còn nằm trong quá khứ.
+- **Cột thời gian hệ thống** (`created_at`, `updated_at`, `sent_at`) — là dấu vết thao tác,
+  dời chúng làm sai nhật ký kiểm toán.
+
+Sau khi đổi lịch, `schedule-compress` **vẫn cần** mục tiêu xa: `mapToCalendar` dàn hạng mục
+chưa làm ra từ `todayStr()`, nên `calendar_end` luôn là hôm nay + đường găng còn lại. Vì vậy
+mọi response không khả thi đều kèm `earliest_feasible_target` — ngày đích nhỏ nhất dùng
+được, tìm bằng quét bước rồi nhị phân (đo 2026-09-30: gợi ý 2027-07-24, dùng vào thật sự
+khả thi).
+
 ## Còn phải làm bằng tay (cần `sudo`)
 
 **`UPLOADS_DIR` trên filesystem riêng** — mục `uploads_volume` đỏ vì lý do thật: khi thay

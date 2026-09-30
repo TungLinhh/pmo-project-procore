@@ -60,7 +60,43 @@ exec(`DELETE FROM directives WHERE body LIKE 'directive-p0-05-%' OR body = 'E2E 
 exec(`DELETE FROM issues WHERE title = 'E2E test issue';`);
 exec(`DELETE FROM kpi_targets WHERE kpi_code = 'TEST_E2E';`);
 exec(`DELETE FROM schedule_baselines WHERE notes = 'E2E test baseline';`);
-exec(`DELETE FROM auth_refresh_tokens WHERE revoked_at IS NOT NULL OR expires_at < now() - INTERVAL '7 days';`);
+// Phiên đăng nhập tích luỹ. Bản đầu chỉ dọn token **đã thu hồi** hoặc **hết hạn**,
+// nên token còn hiệu lực của các lần chạy e2e tích luỹ vô hạn — đo 2026-09-30:
+// 10 150 dòng, và bảng vượt sàn `RETENTION_MIN_ROWS` (10 000) nên
+// `tests/e2e/retention.mjs` đỏ vì giả định "bảng nhỏ được bảo vệ" không còn đúng.
+// Xoá hết token phiên: chỉ buộc đăng nhập lại, không mất dữ liệu nghiệp vụ.
+exec(`DELETE FROM auth_refresh_tokens;`);
+exec(`DELETE FROM auth_revoked_jti WHERE expires_at < now() + INTERVAL '1 day';`);
+
+// Tài khoản thử do bài kiểm tạo mà **không tự dọn** (đo 2026-09-30: còn sót
+// `admin@pilot.test` với role `admin`). Năm bài tạo ra nó:
+// realtime, deadline-replan, ai-assistant, cross-tenant-guard, password-rotation.
+// Xoá theo thứ tự khoá ngoại: link lịch → digest → notifications → user.
+// Giữ đúng tên miền demo `@hbg.com`; không đụng tài khoản thật.
+// Xoá user thử **có thể không được**, và đó là hệ quả đúng chứ không phải lỗi:
+// `audit_log` cố ý giữ dấu vết nên có khoá ngoại tới `users` ⇒ mọi dòng audit mà user
+// thử sinh ra chặn việc xoá user đó. Xoá audit để xoá user là **đánh đổi không nên làm**
+// (mất dấu vết chỉ để dọn một tài khoản thử).
+//
+// Nên: dọn hết thứ có thể dọn, rồi **báo** phần còn lại thay vì để script crash — một
+// kịch bản dọn crash ở dòng cuối thì mất luôn phần đã dọn trước đó trong lần chạy đó.
+for (const uid of (sh(`SELECT string_agg(id::text, ',') FROM users WHERE email LIKE '%@pilot.test';`) || '')
+  .split(',').filter(Boolean)) {
+  exec(`DELETE FROM schedule_links WHERE created_by = ${uid};`);
+  exec(`DELETE FROM attention_digest_runs WHERE user_id = ${uid};`);
+  exec(`DELETE FROM notifications WHERE user_id = ${uid};`);
+  exec(`DELETE FROM auth_refresh_tokens WHERE user_id = ${uid};`);
+  try {
+    exec(`DELETE FROM users WHERE id = ${uid};`);
+    console.log(`  xoá user thử id=${uid}`);
+  } catch (e) {
+    const why = /audit_log_user_id/.test(e.message)
+      ? 'còn dòng audit_log tham chiếu (giữ dấu vết — không xoá)'
+      : e.message.split('\n')[0].slice(0, 90);
+    console.log(`  · user thử id=${uid} giữ lại: ${why}`);
+    console.log('    → nguồn rác: realtime, deadline-replan, ai-assistant, cross-tenant-guard, password-rotation');
+  }
+}
 exec(`UPDATE notifications SET read_at = COALESCE(read_at, now());`);
 console.log('cleared test rows + bell (all users marked read)');
 

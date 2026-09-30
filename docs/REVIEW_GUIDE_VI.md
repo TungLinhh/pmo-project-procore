@@ -43,6 +43,7 @@ sleep 20 && curl -s -o /dev/null -w '%{http_code}\n' localhost:3000/api/ready
 
 ```bash
 node tests/e2e/deploy-recovery.mjs     # ALL PASS — 7 phép thử âm tính
+node tests/e2e/demo-dates-relative.mjs # ALL PASS — lịch tương đối + nén lịch chỉ đường
 ```
 
 Hai lỗi ở đây đáng nhớ vì chúng **không hỏng, chúng nói dối**: `pg-ctl.sh` báo thành công

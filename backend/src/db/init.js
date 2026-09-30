@@ -35,6 +35,34 @@ try {
   process.exit(1);
 }
 
+  // ── Cấp quyền đọc cho `pmo_backup` TRÊN MỌI BẢNG, sau mỗi lần migrate ───────────
+  // Vì sao phải ở đây, mà không chỉ dựa vào `ALTER DEFAULT PRIVILEGES`:
+  // default privileges chỉ phủ object tạo **sau** nó **bởi đúng role đã đặt**. Migration
+  // của dự án chạy bằng `pmo_user` (owner), còn `00-backup-role.sh` thường chạy bằng
+  // `vutun` ⇒ bảng mới tạo bởi `pmo_user` **không** được phủ. Đo 2026-09-30: thêm bảng
+  // `demo_date_rebase` xong thì `POST /api/admin/backups/run` trả 500 với
+  // `permission denied for table demo_date_rebase` — tức **sao lưu hỏng đúng lúc thêm
+  // bảng mới**, đúng thứ `00-backup-role.sh` đã cảnh báo bằng comment nhưng không chặn
+  // được. `pg_dump` dừng ở bảng đầu tiên không đọc được.
+  //
+  // Nên: sau migrate, cấp lại cho toàn bảng. Rẻ, và tự phục hồi ở lần boot sau — bài
+  // kiểm `tests/e2e/backup.mjs` bắt được hồi quy này, không phải may mắn.
+  try {
+    const hasBackupRole = await db.prepare(`SELECT 1 AS ok FROM pg_roles WHERE rolname = 'pmo_backup'`).getAsync();
+    if (hasBackupRole?.ok) {
+      await db.exec('GRANT SELECT ON ALL TABLES IN SCHEMA public TO pmo_backup');
+      await db.exec('GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO pmo_backup');
+      console.log('✓ pmo_backup: granted SELECT on all tables/sequences (backup-safe)');
+    } else {
+      // Không phải lỗi: máy dev không cài role sao lưu. Nhắc để không ai tưởng sao lưu
+      // chạy được khi thực tế không có role nào đọc.
+      console.log('· pmo_backup chưa có — bỏ qua (xem deploy/production/00-backup-role.sh)');
+    }
+  } catch (e) {
+    // Không được làm hỏng boot vì việc cấp quyền sao lưu thất bại; chỉ cảnh báo.
+    console.error(`⚠ cấp quyền pmo_backup thất bại: ${e.message}`);
+  }
+
 // Create unique indexes required by db.upsert() in ingestors
 const requiredIndexes = [
   { name: 'business_process_steps_process_ord_uq', table: 'business_process_steps', cols: ['process_id', 'ordinal'] },

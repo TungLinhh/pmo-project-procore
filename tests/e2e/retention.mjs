@@ -51,16 +51,25 @@ try {
   ok(!retentionPlan().some((p) => p.table === 'audit_log'),
     'mặc định KHÔNG dọn audit_log (cần AUDIT_RETENTION_DAYS > 0)');
 
-  // 2. A small table is protected by the floor, so a demo/UAT DB keeps evidence.
-  setEnv('RETENTION_MIN_ROWS', 10000);
+  // 2. Sàn `RETENTION_MIN_ROWS` phải giữ bảng **nhỏ**. Đo 2026-09-30: bài này đỏ vì
+  //    `auth_refresh_tokens` đã có 10 150 dòng — **vượt** sàn 10 000. Bản đầu giả định
+  //    bảng luôn nhỏ, nên đây không phải hồi quy sản phẩm mà là bài kiểm phụ thuộc
+  //    **kích thước bảng thật**, tức không tự chứa: đủ một vài lần chạy e2e là đỏ.
+  //
+  //    Cách sửa: dùng ngưỡng **lớn hơn bảng thật** (đọc số dòng rồi cộng dư) thay vì
+  //    đoán một con số. Như vậy khẳng định giữ đúng ý nghĩa — "bảng dưới sàn thì không
+  //    xoá gì" — ở mọi kích thước DB, và nếu sàn bị nới sai thì bài vẫn bắt được.
+  const rtRows = Number(psql('SELECT count(*) FROM auth_refresh_tokens'));
+  const floorAbove = rtRows + 1000;
+  setEnv('RETENTION_MIN_ROWS', floorAbove);
   setEnv('SESSION_RETENTION_DAYS', 0);
   setEnv('AI_LOG_RETENTION_DAYS', 0);
   const guarded = await runRetention();
   const rt = guarded.results.find((r) => r.table === 'auth_refresh_tokens');
   ok(rt?.deleted === 0 && /ngưỡng/.test(rt?.skipped || ''),
-    `bảng nhỏ hơn RETENTION_MIN_ROWS thì bỏ qua (${rt?.skipped || 'xoá!'})`);
+    `bảng nhỏ hơn RETENTION_MIN_ROWS thì bỏ qua (bảng ${rtRows} dòng, sàn ${floorAbove}) — kết quả: ${rt?.skipped || 'xoá!'}`);
   ok(psql(`SELECT count(*) FROM auth_refresh_tokens WHERE id = ${tokenIds[0]}`) === '1',
-    'dòng hết hạn vẫn còn khi bảng dưới ngưỡng');
+    `dòng hết hạn vẫn còn khi bảng dưới ngưỡng (${rtRows} dòng)`);
 
   // 3. Floor lifted, window at its 1-day floor → expired rows go, live rows stay.
   setEnv('RETENTION_MIN_ROWS', 0);

@@ -216,6 +216,39 @@ khi mã trùng, và chặn sửa `code` (xem mục 11.6 trong `docs/CODEBASE_BUG
 chính DB đang dùng.
 
 ## 13. Ngày lịch của dự án demo nằm ở 2019-2020, còn "hôm nay" là 2026 (2026-09-28)
+> **ĐÃ QUYẾT 2026-09-30 — không còn chờ ký.** Chọn phương án: **dựng lịch demo tương đối
+> so với hiện tại**, giữ nguyên hình dạng lịch gốc. Đã thực hiện bằng
+> `scripts/rebase-demo-dates.mjs` (dời **một hằng số** mọi cột ngày gắn dự án, nên mọi
+> khoảng cách và quan hệ phụ thuộc được giữ nguyên), offset ghim trong `demo_date_rebase`
+> để chạy lại không trôi.
+>
+> **Đo trước → sau:** `BTE-WP4-HBC` 2019-03-13 → 2020-02-20 **trở thành** 2026-01-19 →
+> 2026-12-29 (bắt đầu 254 ngày trước, kết thúc +90 ngày). Thời lượng trung bình giữ
+> nguyên 22,2 ngày. Ba mục bị ghi nhận thêm khi làm:
+>
+> 1. **Dời ngày KHÔNG làm nén lịch khả thi.** `mapToCalendar` dàn hạng mục chưa làm ra từ
+>    `todayStr()`, nên `calendar_end` vẫn là 2027-06-25 (268 ngày tới) **y hệt** trước và
+>    sau khi dời. Đã sửa riêng: response 422/preview giờ kèm `earliest_feasible_target` —
+>    ngày đích nhỏ nhất dùng được, **tìm ra** chứ không đoán (đoán `calendar_end + 1` cho
+>    2027-06-26 thì dùng vào vẫn không khả thi, vì đổi mục tiêu thì lịch tính ra cũng đổi).
+>    Đo: gợi ý 2027-07-24, dùng vào thật sự `feasible=true`.
+> 2. **Phải dời mọi bảng, không chỉ lịch** — 19 bảng gắn dự án + 4 bảng nối gián tiếp
+>    (`schedule_baseline_items` qua `baseline_id`, `invoices` qua `contract_id`,
+>    `payment_requests` qua `invoice_id`, `daily_work_items` qua `daily_report_id`).
+>    Dời lịch mà không dời payment/contract thì demo tự mâu thuẫn.
+> 3. **Ô đang ở hiện tại thì giữ nguyên, không dời.** Công cụ chỉ dời ô còn nằm trong quá
+>    khứ. Lý do cụ thể: `attention_digest_runs.digest_date` = 2026-09-26→29 (lịch sử
+>    **cron**; dời 2504 ngày ⇒ thành 2033 ⇒ cron tưởng hôm nay chưa chạy digest) và
+>    `projects.end_date` của BTE = 2027-01-20 (đã ở hiện tại; dời ⇒ 2033).
+>
+> **Phát sinh thêm:** 25 hạng mục có `plan_end_date = plan_start_date − 1 ngày` (lỗi dữ
+> liệu nguồn, nhóm "Hệ thống cấp thoát nước"; dời hằng số không thể tạo ra). Đã chuẩn
+> hoá thành hạng 1 ngày bằng `--fix-inverted`; chạy lại báo 0 nên idempotent. Cột
+> `plan_duration_days` không dùng làm chuẩn được — chỉ 14/716 dòng khớp khoảng ngày.
+>
+> **Còn lại của mục này:** không có gì chặn. Xem `tests/e2e/demo-dates-relative.mjs`.
+
+
 
 **Đo được:** `construction_schedule_items` của dự án demo chính (`BTE-WP4-HBC`) có
 `plan_start_date`/`plan_end_date` từ 2019-07 tới 2020-02. `runCompression()`

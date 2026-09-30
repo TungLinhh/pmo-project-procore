@@ -15,6 +15,32 @@ const read = (rel) => readFileSync(`${ROOT}${rel}`, 'utf8');
 const SECRET_PREFIXES = ['sk-or-v1-', 'sk-proj-', 'sk-ant-', 'AIza', 'ghp_', 'xoxb-', 'eyJhbGciOi'];
 const TEXT_EXT = /\.(js|mjs|ts|tsx|jsx|json|md|sql|yml|yaml|sh|example|env|txt|css|html)$/i;
 
+/**
+ * Tiền tố + **vật liệu khoá thật** mới là rò rỉ. Chỉ có tiền tố thì là **mẫu dùng để
+ * phát hiện**, và bỏ qua nó là sai vì khiến chính bài kiểm này không bao giờ được
+ * commit — một bài kiểm mà phải giữ ngoài repo thì không kiểm được gì trong CI.
+ *
+ * Đo 2026-09-30: sau khi commit, bài này đỏ vì chính nó (`SECRET_PREFIXES`) và
+ * `docs/SECRET_ROTATION_RUNBOOK.md` chứa tiền tố trong **văn xuôi**. Trước đó chúng
+ * chưa được track nên bộ quét không thấy — tức bài kiểm chỉ bắt đầu có tác dụng từ
+ * đúng thời điểm nó có ý nghĩa. Đó cũng là lý do phải có phép thử âm tính ở đây.
+ *
+ * Khoá thật của OpenRouter: `sk-or-v1-` + 64 ký tự hex. Nên đòi **≥32 ký tự** khoá vật
+ * liệu liên tiếp ngay sau tiền tố, và loại trừ dấu `…`/`...` (dấu của ví dụ).
+ */
+const KEY_BODY_MIN = 32;
+function looksLikeCredential(text, prefix) {
+  let i = text.indexOf(prefix);
+  while (i !== -1) {
+    const tail = text.slice(i + prefix.length, i + prefix.length + KEY_BODY_MIN);
+    const isPlaceholder = /^\s*(?:…|\.\.\.|$)/.test(tail);
+    // Vật liệu khoá thật là ký tự không khoảng trắng, liên tiếp, đủ dài.
+    if (!isPlaceholder && tail.length >= KEY_BODY_MIN && /^[A-Za-z0-9_\-+/=]+$/.test(tail)) return true;
+    i = text.indexOf(prefix, i + 1);
+  }
+  return false;
+}
+
 try {
   // 1. Nothing tracked by git looks like a secret.
   const tracked = execSync('git ls-files', { cwd: ROOT, encoding: 'utf8' })
@@ -25,7 +51,7 @@ try {
     let text;
     try { text = readFileSync(`${ROOT}/${file}`, 'utf8'); } catch { continue; }
     for (const prefix of SECRET_PREFIXES) {
-      if (text.includes(prefix)) { offenders.push(`${file} (${prefix}…)`); break; }
+      if (looksLikeCredential(text, prefix)) { offenders.push(`${file} (${prefix}…)`); break; }
     }
   }
   ok(offenders.length === 0, `no tracked file contains a credential prefix${offenders.length ? ` — ${offenders.join(', ')}` : ''}`);

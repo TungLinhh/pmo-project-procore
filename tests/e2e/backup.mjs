@@ -23,6 +23,63 @@ const J = (body, token) => ({
 });
 const exec = (sql) => psqlQuery(sql).split('\n')[0];
 
+// ── Không bảng nào đọc không được với `pmo_backup` ────────────────────────────────
+// Đo 2026-09-30: thêm bảng `demo_date_rebase` (migration `9999av`) rồi sao lưu hỏng —
+// `POST /api/admin/backups/run` trả 500 với `permission denied for table
+// demo_date_rebase`. Nguyên nhân: `ALTER DEFAULT PRIVILEGES` trong
+// `deploy/production/00-backup-role.sh` chỉ phủ object tạo **sau** nó **bởi đúng role
+// đã đặt**; migration chạy bằng `pmo_user` còn script thường chạy bằng `vutun.
+//
+// Bài kiểm "sao lưu chạy được" **không** bắt được lớp lỗi này nếu bảng mới không có
+// dòng dữ liệu: `pg_dump` chỉ đọc bảng có dữ liệu. Nên phải kiểm **quyền** trực tiếp —
+// đó là thứ phụ thuộc vào *số bảng*, không phụ thuộc vào *số dòng*.
+{
+  const hasRole = exec(`SELECT count(*) FROM pg_roles WHERE rolname = 'pmo_backup'`) === '1';
+  if (!hasRole) {
+    console.log('  SKIP — chưa có role pmo_backup (xem deploy/production/00-backup-role.sh)');
+  } else {
+    // Subquery **bắt buộc**, không viết thẳng vào `WHERE` của một join. Thứ tự đánh giá
+    // điều kiện trong Postgres không được bảo đảm, nên `has_sequence_privilege` có thể
+    // chạy trên dòng ở schema `pg_toast` mà `nspname = 'public'` sẽ loại ⇒ ném
+    // `pg_toast_24682 is not a sequence` (đo 2026-09-30). Lọc trong subquery trước rồi
+    // mới gọi hàm là cách duy nhất chắc chắn.
+    const unreadable = psqlQuery(
+      `SELECT string_agg(relname, ', ' ORDER BY relname) FROM (
+         SELECT c.relname, c.oid
+           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public' AND c.relkind = 'r'
+       ) t
+       WHERE NOT has_table_privilege('pmo_backup', t.oid, 'SELECT')`
+    ).trim();
+    // `ok`/`ng` ở file này là **hàm ghi log** `(name, detail)`, không phải khẳng định
+    // `(cond, msg)`. Bản đầu gọi `ok(!unreadable, …)` ⇒ **luôn** in PASS ⇒ kiểm không
+    // thể thất bại (đo 2026-09-30 bằng phép thử âm tính: bỏ grant xong câu vẫn in
+    // `PASS — false: …`). Phải rẽ nhánh tường minh.
+    if (unreadable) ng('pmo_backup đọc được mọi bảng trong schema public', `thiếu quyền SELECT: ${unreadable}`);
+    else ok('pmo_backup đọc được mọi bảng trong schema public', 'ok');
+    // `pg_dump` còn đọc `last_value` của sequence để ghi `setval`; thiếu thì dừng giữa
+    // chừng ở sequence (đo 2026-09-28, `permission denied for sequence ai_calls_id_seq`).
+    // `has_sequence_privilege(user, …, privilege)` — user đứng **trước**. Đặt sai thứ tự
+    // Postgres hiểu là overload khác và báo `unrecognized privilege type`.
+    // CTE phải `MATERIALIZED`. Bản dùng subquery thường vẫn lỗi: Postgres **rút phẳng**
+    // (subquery pull-up) subquery đơn giản, nên điều kiện lọc lại được nhét ngược vào
+    // `WHERE` và bảo đảm thứ tự lọc trước biến mất. `MATERIALIZED` là chỉ dẫn tường
+    // minh buộc Postgres không rút phẳng — đo 2026-09-30: lỗi `cost_codes is not a
+    // sequence` chính là do pull-up.
+    const badSeq = psqlQuery(
+      `WITH s AS MATERIALIZED (
+         SELECT c.relname, c.oid
+           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public' AND c.relkind = 'S'
+       )
+       SELECT string_agg(relname, ', ' ORDER BY relname) FROM s
+        WHERE NOT has_sequence_privilege('pmo_backup', oid, 'SELECT')`
+    ).trim();
+    if (badSeq) ng('pmo_backup đọc được mọi sequence', `thiếu quyền SELECT: ${badSeq}`);
+    else ok('pmo_backup đọc được mọi sequence', 'ok');
+  }
+}
+
 try {
   // 0. Pure prune: giữ 7 bản mới nhất trong 10.
   const files = Array.from({ length: 10 }, (_, i) => `pmo-202609${String(i + 1).padStart(2, '0')}-020000.dump`);
