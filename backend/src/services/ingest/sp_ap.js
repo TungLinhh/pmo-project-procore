@@ -21,8 +21,21 @@ function resolveZone(zoneCode) {
 export function locatePaymentCols(rows, map) {
   if (!map) return null;
   const N = (v) => norm(v);
+  // Band CHỈ gồm các dòng tiêu đề, **không gồm dòng dữ liệu**.
+  //
+  // Bản đầu lấy `headerRow … headerRow + 2` thẳng. Với sheet một dòng tiêu đề, dòng
+  // `headerRow + 1` và `+ 2` là **dữ liệu** — và `findCol` quét cả chúng. Đo 2026-09-30:
+  // cột `Status` chứa chữ `PAID` ở dòng dữ liệu đầu tiên, nên `paidCol` dò ra **giá trị
+  // `"PAID"` tại cột 13** thay vì cột "Ngày TT thực tế" ở cột 21 ⇒ mọi dòng đều không có
+  // ngày trả ⇒ `payments = 0`, trong khi `parse` vẫn ra 122 hạng mục và `commit` báo
+  // `errors: 0`. Lỗi **im lặng và rất dễ nhầm là "không có dữ liệu trả"**.
+  //
+  // `map.dataStart` đã cho biết dòng dữ liệu bắt đầu ở đâu (do `locateMaterialHeader`
+  // dò băng tiêu đề rồi chốt). Nên band = các dòng tiêu đề thật, vẫn hỗ trợ header nhiều
+  // dòng nhưng không bao giờ đọc vào ô dữ liệu.
+  const headerRows = Math.max(1, Math.min(3, (map.dataStart ?? map.headerRow + 3) - map.headerRow));
   const band = [];
-  for (let k = 0; k <= 2; k++) band.push(rows[map.headerRow + k] || []);
+  for (let k = 0; k < headerRows; k++) band.push(rows[map.headerRow + k] || []);
   const at = (rr, c) => N((band[rr] || [])[c]);
   const from = map.actualCol != null ? map.actualCol + 1 : 0;
   const findCol = (re, skipRe = null) => {
@@ -164,7 +177,18 @@ export async function commit(parsed, projectId, zoneCode) {
             // với `value` là **giá trị hợp đồng** trong sheet, khác `pr.amount` (tiền
             // của đợt này) ⇒ mọi khoản nạp vào đều không đi qua nổi kiểm tra đó.
             // Comment cũ mô tả ý định đúng nhưng code chưa làm theo.
-            const requestAmount = Number(pr.amount ?? 0);
+            // `pr` ở đây **không có trường `amount`**: nhánh tạo mới gán
+            // `{ id, status }`, còn nhánh tìm thấy thì `SELECT id, status`. Nên
+            // `Number(pr.amount ?? 0)` ra `0` **mọi lần** và mọi dòng đã trả đều ném
+            // `has no usable amount`.
+            //
+            // Đo 2026-09-30: nhánh PAID của importer **chưa từng chạy được** — nó bị che
+            // vì cả 14 file `Vật tư *.xlsx` trên máy đều có ô thanh toán **rỗng**, nên
+            // không dòng nào có `paid_date` để đi vào nhánh này. Sửa bằng cách đọc
+            // `amount` từ DB (nguồn chân lý) thay vì tin object in-memory; chỉ tốn
+            // thêm một truy vấn, và chỉ trên nhánh đã trả.
+            const prRow = await db.prepare('SELECT amount FROM payment_requests WHERE id = ?').getAsync(pr.id);
+            const requestAmount = Number(prRow?.amount ?? 0);
             if (!Number.isFinite(requestAmount) || requestAmount <= 0) {
               throw new Error(`payment request ${prNo} has no usable amount; manual reconciliation required`);
             }
@@ -191,7 +215,19 @@ export async function commit(parsed, projectId, zoneCode) {
                       approved_date = COALESCE(approved_date, CURRENT_DATE)
                 WHERE id = ? AND status IN ('PENDING', 'APPROVED')`
             ).runAsync(approvedBy?.id ?? null, pr.id);
-            if (!flipped.rowCount) {
+            // `runAsync()` trả `{ lastInsertRowid, changes }` — **không** có `rowCount`
+            // (`backend/src/db/index.js:218`). Đo 2026-09-30: `flipped.rowCount` luôn
+            // `undefined` ⇒ `!undefined` là đúng ⇒ **mọi** dòng đã trả đều ném lỗi, và
+            // nhánh PAID của importer S&P **chưa từng chạy được**. Nó bị che vì cả 14 file
+            // `Vật tư *.xlsx` trên máy đều có ô thanh toán rỗng ⇒ không dòng nào có
+            // `paid_date` để đi vào đây.
+            //
+            // Lưu ý khi đọc code: 5 chỗ khác cũng viết `.rowCount` (`routes/shop.js`,
+            // `routes/payment.js` ×2, `routes/qa.js`, `routes/projects.js`,
+            // `routes/schedule-compress.js`) nhưng chúng gọi **`client.query()` thô**,
+            // mà `pg` trả `rowCount` thật. Chỉ chỗ này đi qua shim `db.prepare()` nên sai.
+            // Phân biệt bằng cách xem kết quả lấy từ đâu, không phải tên trường.
+            if (!flipped.changes) {
               const current = await db.prepare('SELECT status FROM payment_requests WHERE id = ?').getAsync(pr.id);
               throw new Error(
                 `payment request ${prNo} is ${current?.status || 'unknown'}; only PENDING or APPROVED can be imported as PAID`,

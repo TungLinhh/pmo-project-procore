@@ -12,7 +12,7 @@
 // Tuần tự là bắt buộc: các bài dùng chung một database demo, chạy song song sẽ
 // đụng dữ liệu của nhau và làm hỏng đúng những bài đang kiểm.
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { spawn, execSync } from 'node:child_process';
+import { spawn, execSync, execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 
 const E2E = 'tests/e2e';
@@ -85,6 +85,31 @@ const NEEDS_EXTERNAL = {
 // trường chạy bộ (nạp từ `backend/.env` nếu cần).
 const RUN_AI = ['demo-real-ai.mjs', 'ai-srs-evaluation.mjs'];
 
+// ── Sổ S&P mẫu cho `step1-05` / `step1-06` ──────────────────────────────────────
+// Sinh **một lần** rồi tái dùng cho mọi bài. Không có sổ S&P của khách hàng trên máy này
+// (đo 2026-09-28: cả 14 file `Vật tư *.xlsx` có bảng kê vật tư *và* cột thanh toán, nhưng
+// **ô thanh toán rỗng** ⇒ `sp_ap.parse` ra `batches: 0`), nên bộ chạy tự sinh từ dữ liệu
+// đang có. Quyết định của chủ dự án 2026-09-30 (phương án C).
+//
+// ⚠ Số trong sổ sinh ra là số **dự án demo**, dùng để kiểm logic ingest — TUYỆT ĐỐI
+// không dùng cho đối soát giá trị. `npm run test:reconcile` không đọc file này.
+//
+// Nếu sinh hỏng (ví dụ DB sạch chưa có chuỗi hợp đồng → hóa đơn → PR) thì để `SP_FILE`
+// trống ⇒ hai bài tự `SKIP` kèm lý do, đúng như trước. Lỗi sinh file không được làm hỏng
+// cả bộ chạy.
+const SP_ENV = (() => {
+  if (process.env.SP_FILE) return { SP_FILE: process.env.SP_FILE };
+  const out = join(ROOT, 'data/samples/sp-ap-from-demo.xlsx');
+  try {
+    execFileSync('node', [join(ROOT, 'scripts/build-sp-ap-sample.mjs'), out], {
+      cwd: ROOT, stdio: 'ignore', timeout: 120000, env: { ...process.env, DATABASE_URL: '' },
+    });
+    return { SP_FILE: out };
+  } catch {
+    return {};
+  }
+})();
+
 
 const args = process.argv.slice(2);
 const filter = (args.find((a) => a.startsWith('--filter=')) || '').slice(9);
@@ -101,7 +126,9 @@ function run(file, envOverride = {}) {
     // một nguyên nhân). Bài `auth-rate-limit.mjs` **tự kiểm hạn mức này** nên nó nằm
     // trong `NEEDS_EXTERNAL` và không bị ảnh hưởng.
     const child = spawn('node', [join(E2E, file)], {
-      env: { ...process.env, LOGIN_RATE_MAX: '1000', ...SHARED_SERVER_ENV, ...envOverride },
+      env: {
+        ...process.env, LOGIN_RATE_MAX: '1000', ...SHARED_SERVER_ENV, ...envOverride, ...SP_ENV,
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let out = '';

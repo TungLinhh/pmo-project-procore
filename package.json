@@ -33,7 +33,9 @@
     "test:reconcile": "node tests/e2e/reconcile-values.mjs",
     "storage:gc": "node scripts/storage-gc.mjs",
     "lint": "npm run lint --workspaces --if-present",
-    "audit:schema": "node tests/tools/schema-audit.mjs"
+    "audit:schema": "node tests/tools/schema-audit.mjs",
+    "sp-ap:sample": "node scripts/build-sp-ap-sample.mjs",
+    "test:step1": "node scripts/build-sp-ap-sample.mjs && SP_FILE=data/samples/sp-ap-from-demo.xlsx node tests/e2e/step1-05-sp-ap.mjs && SP_FILE=data/samples/sp-ap-from-demo.xlsx node tests/e2e/step1-06-bte-dashboard.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

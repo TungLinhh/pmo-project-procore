@@ -179,6 +179,47 @@ là quyết định nghiệp vụ:
 - [ ] C. Thêm cả sửa và xoá mềm (`status`), chặn xoá cứng khi bản ghi đã được tham
       chiếu, và ghi mọi thay đổi vào nhật ký kiểm tra.
 
+## 17. Sổ S&P của khách hàng — ĐÃ QUYẾT 2026-09-30 (phương án C)
+
+`tests/e2e/step1-05-sp-ap.mjs` và `step1-06-bte-dashboard.mjs` cần sổ thanh toán NCC có
+**bảng kê vật tư + cột thanh toán có số thật**. Thiếu đúng
+`TIẾN ĐỘ THANH TOÁN A_B/HBG-BTE-MSA-S&P-CTY-2020.03.28.xlsx`.
+
+Đo 2026-09-28 trên toàn bộ `reference_sheets/`: 14 file `Vật tư *.xlsx` có bảng kê vật
+tư *và* cột thanh toán, nhưng **ô thanh toán rỗng** ⇒ `sp_ap.parse` ra `batches: 0`; nhóm
+`TIẾN ĐỘ THANH TOÁN A_B/*.xlsx` có tiền nhưng không có bảng kê.
+
+**Chủ dự án chọn C: dựng sổ từ dữ liệu đang có.** Đã thực hiện bằng
+`scripts/build-sp-ap-sample.mjs` (tái lập được, mọi cột truy được về một trường trong DB).
+Cả hai bài nay chạy và xanh.
+
+> **Ràng buộc: số trong sổ sinh ra là số DỰ ÁN DEMO.** Dùng để kiểm logic ingest
+> (parse → commit → chuỗi hợp đồng → hóa đơn → PR → thanh toán), **tuyệt đối không dùng
+> cho đối soát giá trị**. `npm run test:reconcile` không đọc file này. Tôi đã khuyến nghị
+> phương án A (ghi là thiếu dữ liệu) và chủ dự án chọn C — nên ghi rõ ở đây để không ai
+> sau này lấy nhầm làm số thật.
+
+Mỗi lần chạy lại sẽ sinh lại file, nên **sổ khách hàng vẫn nên đưa vào** khi có; khi đó
+đặt `SP_FILE` và bộ chạy sẽ dùng file đó thay vì file sinh.
+
+### Lỗi sản phẩm lộ ra khi làm việc này (đã sửa)
+
+1. **Nhánh PAID của importer S&P chưa từng chạy được.** `sp_ap.commit()` đọc
+   `flipped.rowCount` trong khi `db.prepare().runAsync()` trả `{ lastInsertRowid, changes }`
+   ⇒ `!undefined` luôn đúng ⇒ **mọi** dòng đã trả đều ném lỗi. Nó bị che vì cả 14 file
+   `Vật tư *.xlsx` đều có ô thanh toán rỗng ⇒ không dòng nào có `paid_date` để đi vào
+   nhánh đó. Đo: 45/45 dòng đã trả đều lỗi trước khi sửa, 0/45 sau khi sửa.
+   *Lưu ý khi đọc code:* 6 chỗ khác cũng viết `.rowCount` nhưng gọi `client.query()` thô
+   mà `pg` trả `rowCount` thật — chỉ chỗ đi qua shim `db.prepare()` là sai.
+2. `locatePaymentCols` dò cột trên **cả dòng dữ liệu** (band 3 dòng kể từ header), nên
+   một ô chứa chữ `PAID` trong cột khác bị nhận nhầm là cột "ngày thanh toán thực tế"
+   ⇒ mọi dòng mất ngày trả mà bài kiểm vẫn báo `errors: 0`. Nay band chỉ gồm dòng tiêu đề.
+3. `pr.amount` được đọc từ object in-memory vốn **không có trường đó** (nhánh tạo mới gán
+   `{ id, status }`) ⇒ `Number(undefined ?? 0)` = 0 ⇒ mọi dòng đã trả ném *"has no usable
+   amount"*. Nay đọc từ DB.
+4. Bảng demo có **số yêu cầu thanh toán trùng nhau** (133 dòng / 125 số khác nhau) ⇒
+   importer báo lỗi đúng, vì nó khoá invoice theo `(contract_id, invoice_no)`.
+
 ## Chữ ký
 
 | Vai trò | Người | mục 1 | mục 2 | mục 3 | mục 4 | mục 5 | mục 6 | mục 7 | mục 8 | mục 9 | mục 10 | Ngày |

@@ -176,8 +176,10 @@ cat <<'EOF'
        # rồi sửa UPLOADS_DIR=/mnt/pmo-uploads trong deploy/single-machine/pmo.env
        # và: systemctl --user restart pmo-api.service
 
-  2. Tự khởi động lại sau khi reboot (user unit chỉ sống trong phiên đăng nhập):
-       sudo loginctl enable-linger vutun
+  2. Tự khởi động lại sau khi reboot — ĐÃ XONG trên máy này:
+         loginctl show-user vutun --property=Linger   # => Linger=yes (đo 2026-09-30)
+       Chỉ cần chạy lệnh dưới đây trên máy KHÁC:
+         sudo loginctl enable-linger vutun
 
   3. Đóng 3 sai lệch demo còn lại (xem README.md mục "Sai lệch đã chấp nhận") thì mới
      bật được PRODUCTION_ENFORCE_READINESS=1 — lúc đó backend từ chối boot nếu còn

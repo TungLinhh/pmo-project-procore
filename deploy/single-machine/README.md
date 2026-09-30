@@ -37,12 +37,18 @@ Tài khoản demo: xem `docs/USER_GUIDE_VI.md`. Mật khẩu `admin123` — cầ
 ## Vì sao systemd *user* unit chứ không phải system unit
 
 Máy này không cấp quyền `sudo` không mật khẩu cho tiến trình agent, nên không tạo được
-system unit. User unit chạy được ngay. Đổi lại nó chỉ sống trong phiên đăng nhập; muốn nó
-tự lên sau khi reboot thì cần **một lần**:
+system unit. User unit chạy được ngay. Đổi lại mặc định nó chỉ sống trong phiên đăng nhập;
+muốn nó tự lên sau khi reboot thì cần **một lần**:
 
 ```bash
 sudo loginctl enable-linger vutun
 ```
+
+> **Đã bật rồi — không cần chạy.** Đo 2026-09-30 trên chính máy này:
+> `loginctl show-user vutun --property=Linger` → **`Linger=yes`**. Bản cũ của README vẫn
+> liệt kê nó ở mục "Còn phải làm bằng tay", khiến người đọc tưởng còn việc — và người đọc
+> tin lời giải thích thay vì đo, đúng như đã xảy ra với danh sách bài kiểm bỏ qua.
+> Lệnh ở trên giữ lại cho máy khác; ở đây chỉ cần biết là **đã xong**.
 
 ## Vì sao env nằm ở `pmo.env` chứ không phải `backend/.env`
 
@@ -118,13 +124,40 @@ khả thi).
 
 ## Còn phải làm bằng tay (cần `sudo`)
 
-**`UPLOADS_DIR` trên filesystem riêng** — mục `uploads_volume` đỏ vì lý do thật: khi thay
-image hoặc đổi cây ứng dụng, toàn bộ file tải lên sẽ mất theo. Máy này chỉ có một
-filesystem nên không tách được nếu không mount.
+## `uploads_volume` — KHÔNG THỂ đóng trên máy này (đã đo, không phải thiếu quyền)
+
+Bản cũ của mục này ghi *"cần `sudo`, chạy `mkfs` trên `/dev/sdd5`"*. **Đó là sai**, và sai
+theo hướng đáng sợ nhất: nó chỉ cho một người ra lệnh sẽ làm hỏng máy.
+
+Đo 2026-09-30:
+
+```
+$ lsblk -no NAME,FSTYPE,SIZE,MOUNTPOINT
+  sda  388.4M disk
+  sdb    186M disk
+  sdc      2G disk [SWAP]
+  sdd      1T disk /mnt/wslg/distro
+
+$ findmnt -no SOURCE,FSTYPE,TARGET /
+  /dev/sdd  ext4  /
+```
+
+Máy là WSL2 với **một** filesystem duy nhất và **không có phân vùng nào** — `/dev/sdd5`
+trong lệnh cũ **không tồn tại**. `uploads_volume` so `stat().dev` của thư mục với thư mục
+cha; ở đây hai giá trị luôn bằng nhau, nên mục này **không thể** xanh, kể cả khi là root.
+
+Muốn có filesystem thứ hai thì phải **phân vùng lại đĩa** — tức thay image, mất dữ liệu.
+Không phải việc làm được trên máy đang chạy.
+
+**Chủ dự án đã chấp nhận rủi ro này (2026-09-30).** Hậu quả: khi thay image WSL hoặc dọn
+cây ứng dụng, `backend/uploads/` mất theo. Nếu sau này muốn đóng, phải làm trên **đĩa
+thật có phân vùng riêng** (không phải WSL2), theo các bước:
 
 ```bash
-# 1. Tạo filesystem riêng (thay /dev/sdd5 bằng phân vùng thật của bạn)
-sudo mkfs.ext4 -L pmo-uploads /dev/sdd5
+# CHỈ chạy trên máy có phân vùng riêng. Xác nhận trước bằng lsblk — nếu chỉ thấy
+# /dev/sdX không có phân vùng nào thì DỪNG, máy đó không làm được.
+lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT
+mkfs.ext4 -L pmo-uploads /dev/<phân vùng thật>
 sudo mkdir -p /mnt/pmo-uploads
 sudo mount /dev/sdd5 /mnt/pmo-uploads
 sudo chown -R vutun:vutun /mnt/pmo-uploads

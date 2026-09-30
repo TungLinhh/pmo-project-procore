@@ -43,9 +43,16 @@ const psql = (sql) => execFileSync('psql',
 
 // ══ 1. Lịch demo phải nằm quanh hiện tại ═════════════════════════════════════════
 {
+  // Chỉ xét **dự án demo**, không xét dự án mà bài kiểm tạo ra.
+  //
+  // Đo 2026-09-30: khẳng định "không còn hạng mục nào ở quá khứ xa" ban đầu quét **mọi**
+  // dự án, nên nó đỏ vì `step1-06` để sót dự án tạm `BTE-FULL-*` nạp từ hồ sơ gốc. Đó là
+  // rác của bài kiểm, không phải lịch demo hỏng. Bài tạo dự án tạm thì **phải tự dọn**
+  // (đã sửa: `step1-06` thiếu `work_items` trong chuỗi dọn nên FK chặn ⇒ còn sót).
   const rows = psql(
     `SELECT p.code, min(i.plan_start_date)::text, max(i.plan_end_date)::text
        FROM projects p JOIN construction_schedule_items i ON i.project_id = p.id
+      WHERE p.code NOT LIKE 'BTE-FULL-%' AND p.code NOT LIKE 'SPAP-%' AND p.code NOT LIKE 'TST-%'
       GROUP BY p.code ORDER BY p.code`
   ).split('\n').filter(Boolean).map((l) => l.split('|'));
   for (const [code, from, to] of rows) {
@@ -55,11 +62,24 @@ const psql = (sql) => execFileSync('psql',
     ok(back < 400 && fwd > -400,
       `${code}: lịch ${from} → ${to} (bắt đầu ${back} ngày trước, kết thúc ${fwd > 0 ? `+${fwd}` : fwd} ngày)`);
   }
+  // Phạm vi cũng chỉ dự án demo — xem comment ở khối trên.
   const old = psql(
-    `SELECT count(*) FROM construction_schedule_items
-      WHERE plan_start_date < '2024-01-01' OR plan_end_date < '2024-01-01'`
+    `SELECT count(*) FROM construction_schedule_items i JOIN projects p ON p.id = i.project_id
+      WHERE p.code NOT LIKE 'BTE-FULL-%' AND p.code NOT LIKE 'SPAP-%' AND p.code NOT LIKE 'TST-%'
+        AND (i.plan_start_date < '2024-01-01' OR i.plan_end_date < '2024-01-01')`
   );
   ok(Number(old) === 0, `không còn hạng mục nào lọt vào quá khứ xa (đếm được: ${old})`);
+
+  // **Giới hạn thật của việc dời, nói thẳng ra:** dịch chuyển là ở mức **DB**, còn
+  // `reference_sheets/` là bản gốc của khách hàng với ngày 2019 — **không** được sửa. Nên
+  // nạp lại từ hồ sơ gốc sẽ đưa ngày cũ trở lại cho dự án đó. Đây là đánh đổi đã chọn,
+  // không phải lỗi; bài này chỉ canh phần DB.
+  const residue = psql(
+    `SELECT count(*) FROM projects p JOIN construction_schedule_items i ON i.project_id = p.id
+      WHERE p.code LIKE 'BTE-FULL-%' OR p.code LIKE 'SPAP-%'`
+  );
+  ok(Number(residue) === 0,
+    `bài kiểm không để lại dự án tạm (đếm được: ${residue}) — dự án tạm nạp từ hồ sơ gốc nên có ngày 2019`);
 }
 
 // ══ 2. Offset đã ghim ⇒ chạy lại không trôi ═══════════════════════════════════════
@@ -88,7 +108,11 @@ const psql = (sql) => execFileSync('psql',
     `SELECT round(avg(plan_end_date - plan_start_date), 2) FROM construction_schedule_items`
   );
   ok(Number(dur) > 1, `thời lượng trung bình vẫn dương và hợp lý (${dur} ngày)`);
-  const neg = psql(`SELECT count(*) FROM construction_schedule_items WHERE plan_end_date < plan_start_date`);
+  const neg = psql(
+    `SELECT count(*) FROM construction_schedule_items i JOIN projects p ON p.id = i.project_id
+      WHERE p.code NOT LIKE 'BTE-FULL-%' AND p.code NOT LIKE 'SPAP-%' AND p.code NOT LIKE 'TST-%'
+        AND i.plan_end_date < i.plan_start_date`
+  );
   ok(Number(neg) === 0, `không hạng mục nào kết thúc trước khi bắt đầu (${neg})`);
   // Ràng buộc: một ca kéo dài không được vượt quá thời lượng gốc theo tỉ lệ.
   const spread = psql(

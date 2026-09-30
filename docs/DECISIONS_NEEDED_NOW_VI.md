@@ -11,6 +11,22 @@ thứ tự, dữ liệu không nhất quán với chính nó) thì tôi sửa v�
 
 ---
 
+> **ĐÃ QUYẾT 2026-09-30.** Chủ dự án chọn: **D1=A · D2=A · D3=D · D4=C · D5=B ·
+> D6=A**. Mục nào còn lại giữ nguyên vì chọn vậy, ghi rõ bên dưới từng mục.
+>
+> Hệ quả cụ thể đã áp dụng ngay:
+>
+> | Quyết định | Hệ quả đã làm |
+> |---|---|
+> | D1=A | Không UAT, không walkthrough. `docs/UAT_SCOPE_DECISIONS.md` giữ `SIGNED: false`; `PRODUCTION_ENFORCE_READINESS` **giữ `0`** vì `ready` vẫn `false` |
+> | D2=A | Giữ `admin123` + `ALLOW_DEV_PASSWORD=1`. 4 mục readiness đỏ là **sai lệch đã biết**, ghi vào tài liệu bàn giao |
+> | D3=D | 15 mục `DATA_DECISIONS_REQUIRED.md` giữ trạng thái "chưa ký", và giữ nguyên lựa chọn mặc định của tôi |
+> | D4=C | Đã sinh `scripts/build-sp-ap-sample.mjs` + `data/samples/sp-ap-from-demo.xlsx`; `step1-05` và `step1-06` chạy và xanh |
+> | D5=B | **Không tách `UPLOADS_DIR`** — và đo được lý do thật, không phải vì thiếu `sudo` (xem dưới) |
+> | D6=A | Giữ `TAIL_DAYS=90`; lịch BTE = 2026-01-19 → 2026-12-29 |
+
+---
+
 ## D1. Có làm UAT không, và ở mức nào?
 
 ### UAT là gì, và khác gì với kiểm thử tôi đang chạy
@@ -157,6 +173,30 @@ mã nguồn, nên khi thay image hoặc dọn thư mục thì **file tải lên 
 | **C** | Tôi đặt cảnh báo vào script `install.sh` để lần sau nhắc | Không đóng được mục, nhưng không ai quên |
 
 **Khuyến nghị: A.** Đây là mục đỏ duy nhất còn lại do **giới hạn máy** chứ không do cố ý.
+
+> **Đã chọn B, và đo lại thì lý do thật khác điều tôi viết ở trên.** Tôi đã ghi "cần
+> `sudo`" — **sai**. Đo 2026-09-30:
+>
+> ```
+> $ lsblk -no NAME,FSTYPE,SIZE,MOUNTPOINT
+>   sda  388.4M disk
+>   sdb    186M disk
+>   sdc      2G disk [SWAP]
+>   sdd      1T disk /mnt/wslg/distro
+>
+> $ findmnt /  →  /dev/sdd  ext4  /
+> ```
+>
+> Đây là WSL2 với **một** filesystem duy nhất, và **không có phân vùng nào** để mount.
+> `uploads_volume` kiểm `statSync(dir).dev !== statSync(dirname(dir)).dev` — trên máy này
+> hai giá trị luôn bằng nhau. Nên mục này **không thể** xanh, kể cả khi có `sudo` và kể cả
+> khi là root: muốn có filesystem thứ hai thì phải phân vùng lại đĩa, tức phá hỏng bản
+> cài đặt.
+>
+> `sudo -n` cũng thất bại (`a password is required`) nên tôi không chạy được lệnh nào cần
+> nó. Nhưng **nguyên nhân gốc không phải thiếu quyền** — nên đừng để ai đi tìm một lệnh
+> `sudo` vì nó không tồn tại. Sai lệch này đã được ghi vào mục "sai lệch đã chấp nhận"
+> của `deploy/single-machine/README.md`.
 
 ---
 

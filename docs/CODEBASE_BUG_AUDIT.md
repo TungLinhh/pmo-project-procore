@@ -2219,6 +2219,143 @@ hàm nằm **trước** ⇒ lát cắt rỗng ⇒ luôn xanh) và `JSON.stringif
 newline thành chữ `\n` mà `psql` không hiểu. Sửa bằng cách truyền **mảng tham số** cho
 `execFileSync` — không còn lớp trích dẫn nào để sai.
 
+### 11.31 Đợt 22 — D4: dựng sổ S&P mẫu, và ba lỗi sản phẩm đã chôn suốt đời
+
+Chủ dự án quyết 6 mục (2026-09-30): D1=A (demo, không UAT) · D2=A (giữ `admin123`) ·
+D3=D (không ký 15 mục) · **D4=C** (dựng sổ S&P từ dữ liệu đang có) · D5=B · D6=A.
+
+#### D5: tôi đã ghi **sai nguyên nhân**, và sai theo hướng đáng sợ
+
+Tài liệu bàn giao ghi *"mục `uploads_volume` cần `sudo`"*, kèm lệnh
+`mkfs.ext4 /dev/sdd5`. Đo:
+
+```
+$ lsblk -no NAME,FSTYPE,SIZE,MOUNTPOINT
+  sda  388.4M disk      sdb  186M disk
+  sdc  2G disk [SWAP]   sdd  1T disk /mnt/wslg/distro
+$ findmnt -no SOURCE,FSTYPE,TARGET /   →  /dev/sdd  ext4  /
+```
+
+Máy là WSL2 với **một** filesystem, **không có phân vùng nào**. `/dev/sdd5` trong lệnh cũ
+**không tồn tại**. `uploads_volume` so `stat().dev` của thư mục với thư mục cha — ở đây hai
+giá trị luôn bằng nhau ⇒ mục này **không thể** xanh, kể cả khi là root. Muốn có filesystem
+thứ hai thì phải phân vùng lại đĩa, tức thay image.
+
+Nguyên nhân gốc **không phải thiếu quyền**. Sai như vậy thì tệ hơn nhiều: nó chỉ cho một
+người ra lệnh sẽ làm hỏng máy. Đã viết lại cả README lẫn output của `install.sh`.
+
+Cùng kiểu: README và `install.sh` vẫn liệt kê `loginctl enable-linger` ở mục "còn phải
+làm", nhưng đo `loginctl show-user vutun --property=Linger` → **`Linger=yes`**. Đã ghi rõ
+là **đã xong**, giữ lệnh cho máy khác.
+
+#### D4: vì sao phải sinh file bằng công cụ chứ không làm file tay
+
+Bảng kê thật mỗi cột phải **truy được về một trường trong DB**, và bố cục cột bám đúng
+`locateMaterialHeader` + `locatePaymentCols` — trong đó có hai ràng buộc chỉ có trong code,
+không có trong tài liệu nào:
+
+- `locatePaymentCols` dò từ `map.actualCol + 1` ⇒ khối tiền **phải nằm bên phải** cột
+  "ngày thực tế giao".
+- `contractDateCol` dò từ `deliveryAnchor` ⇒ "ngày ký" **phải nằm sau** "thời gian giao".
+
+#### Ba lỗi sản phẩm thật, tất cả đều **im lặng**
+
+1. **Nhánh PAID của importer S&P chưa từng chạy được.** `sp_ap.commit()` đọc
+   `flipped.rowCount`, nhưng `db.prepare().runAsync()` trả `{ lastInsertRowid, changes }`
+   (`db/index.js:218`) ⇒ `!undefined` luôn đúng ⇒ **mọi** dòng đã trả đều ném lỗi.
+   Đo: trước khi sửa **45/45** dòng đã trả đỏ, sau khi sửa **0/45**.
+
+   Nó bị che vì cả 14 file `Vật tư *.xlsx` trên máy đều có **ô thanh toán rỗng** ⇒ không
+   dòng nào có `paid_date` để đi vào nhánh đó. Tức một nhánh nghiệp vụ quan trọng đã chết
+   âm thầm, chỉ vì dữ liệu đầu vào chưa từng chạm tới.
+
+   *Khi đọc code, đừng quy `rowCount` là sai:* 6 chỗ khác cũng viết `.rowCount`
+   (`routes/shop.js`, `routes/payment.js` ×2, `routes/qa.js`, `routes/projects.js`,
+   `routes/schedule-compress.js`) nhưng chúng gọi **`client.query()` thô**, mà `pg` trả
+   `rowCount` thật. Chỉ chỗ đi qua shim `db.prepare()` là sai. Phân biệt bằng **kết quả lấy
+   từ đâu**, không phải tên trường.
+
+2. **`locatePaymentCols` dò cột trên cả dòng dữ liệu.** `band` gồm `headerRow … +2`, mà
+   với sheet một dòng tiêu đề thì `+1`, `+2` là **dữ liệu**. Một ô chứa chữ `PAID` ở cột
+   `Status` bị nhận nhầm là cột "ngày thanh toán thực tế" ⇒ mọi dòng mất ngày trả, trong
+   khi `parse` vẫn ra đủ hạng mục và `commit` báo `errors: 0`. Nay band chỉ gồm dòng tiêu
+   đề (`map.dataStart` cho biết dữ liệu bắt đầu ở đâu).
+
+3. **`pr.amount` đọc từ object in-memory vốn không có trường đó.** Nhánh tạo mới gán
+   `{ id, status }`, nhánh tìm thấy thì `SELECT id, status` ⇒ `Number(undefined ?? 0)` = 0
+   ⇒ mọi dòng đã trả ném *"has no usable amount"*. Nay đọc từ DB.
+
+#### Bốn lỗi trong chính công cụ sinh file (đều bắt bằng đo, không bằng đọc)
+
+- Gộp tiêu đề cảnh báo **vào cùng dòng header** ⇒ mọi cột lệch 2, `paidCol = null`, không
+  dòng nào có ngày trả, mà `parse` vẫn ra 122 hạng mục và `errors: 0`. Sửa: tiêu đề ở
+  dòng riêng.
+- Tên cột ngày trả là `Ngay TT thuc te` — **không** khớp regex `thuc te tt`. Nó chỉ khớp
+  **tình cờ** nhờ giá trị `"PAID"` trong dữ liệu, tức bài kiểm xanh vì lý do sai. Sửa tên
+  cột cho đúng và sửa (2) để không còn dựa vào tai nạn này.
+- Ngày ghi bằng `YYYY-MM-DD` ⇒ `toDate` trả `null` (chỉ hiểu `Date` hoặc `dd/mm/yyyy`) ⇒
+  **mọi** cột ngày rỗng, `payments = 0`, `errors = 0`. Dùng `dd/mm/yyyy` để không có phép
+  chuyển múi giờ nào xen vào (`toDate(Date)` cắt `toISOString()` theo UTC).
+- `xlsx.writeFile` của `@e965/xlsx` không có binding `fs` ⇒ `cannot save file`. Sinh buffer
+  rồi tự ghi.
+- **Backtick trong comment SQL** bên trong template literal chấm dứt chuỗi sớm ⇒
+  `missing ) after argument list`. Comment trong SQL không được chứa backtick.
+
+#### Dữ liệu: số yêu cầu thanh toán **trùng nhau**
+
+Đo: 133 dòng nhưng chỉ **125** `request_no` khác nhau (`HBG-BTE-YCVT-HVAC-` xuất hiện 4
+lần). Importer khoá invoice theo `(contract_id, invoice_no)` và `invoice_no = request_no`
+⇒ dòng thứ hai trùng số trỏ về cùng một PR mà dòng trước đã chuyển PAID ⇒ lỗi *"only
+PENDING or APPROVED can be imported as PAID"*. **Importer cảnh báo đúng; dữ liệu mới là
+thứ sai.** Công cụ lấy mỗi số một lần và **không** bịa hậu tố, để số trong file vẫn là số
+thật.
+
+#### `step1-06`: ba lỗi trong chính bài kiểm, mỗi lỗi chặn cả bài
+
+1. Gõ thẳng `MEP-BTE-MSA-01.xlsx` trong khi đĩa chỉ có `Vật tư GEN.xlsx` ⇒ `ENOENT` **crash**.
+   Đúng loại lỗi comment của chính bài đã ghi cho trường hợp SHOP — đã sửa cho SHOP, sót ở MAT.
+2. Lọc `/^MEP-BTE-SHD-.*\.xlsx$/` trên `readdirSync` trong khi đĩa có `Shop BOH.xlsx` ⇒ khớp
+   **0 file** ⇒ "shop zones ingested" báo 0 và mọi khẳng định phía sau đỏ theo.
+3. `zoneOf` suy zone từ tên chuẩn ⇒ 14/16 file lịch ra `null` và rơi hết vào một zone ⇒
+   "OTD by_zone" chỉ ra 2 zone. Nay suy thêm từ tên gốc (`TĐ BPV-2 BR.xlsx` → `BPV`).
+
+#### Bốn ngưỡng của `step1-06` là **con số tuyệt đối viết cho dữ liệu chưa tồn tại**
+
+Vì bài chưa bao giờ nạp được file nào, các ngưỡng chưa từng được kiểm:
+
+| Ngưỡng cũ | Đo được | Vì sao không đạt được |
+|---|---|---|
+| `shopOk > 300` | 221 | 13 file × ~17 drawing; số dòng đổi theo dữ liệu |
+| `msa.ok >= 40` | 10 | bài nạp **một** file, file lớn nhất có **33 dòng** |
+| `mat >= 40` | 10 | cùng lý do |
+| `matched[0].db_rows > 30` | 12 | chỉ kiểm **zone đầu tiên**; lúc chỉ có 1 zone thì "đầu tiên" cũng là "tất cả" |
+
+Đổi thành **khẳng định quan hệ** — không trôi theo khối lượng dữ liệu: đủ file và không lỗi;
+nạp được dòng; `kpi === committed`; và **tổng** dòng của các zone khớp.
+
+Riêng chênh lệch `rollup 60% ↔ db 100%` thì **báo, không phán**: đó là câu hỏi *dữ liệu*
+(thuộc `DATA_DECISIONS_REQUIRED` mục 3, chưa ký), không phải lỗi *code*. In ra rồi đỏ sẽ
+biến câu hỏi nghiệp vụ thành lỗi kỹ thuật, và lần chạy sau sẽ bị bỏ qua vì "biết rồi".
+
+#### Rác của `step1-06` làm hỏng **ba bài khác**
+
+`step1-06` không dọn `work_items` ⇒ FK chặn ⇒ xoá dự án thất bại ⇒ còn sót
+`BTE-FULL-<ts>` với lịch 2019. Dự án sót đó làm đỏ:
+
+- `demo-dates-relative.mjs` (3 khẳng định) — nó quét **mọi** dự án.
+- `p5-golden.mjs` (1) — khẳng định tập dự án ACTIVE của tenant demo.
+- `reconcile-values.mjs` (2) — đối soát khóa theo dự án.
+
+Đã sửa chuỗi dọn và giới hạn phạm vi các bài kia về **dự án demo**. Xoá rác thì cả ba bài
+xanh trở lại mà không cần sửa gì thêm — minh hoạ đúng quy tắc "bài kiểm phải tự dọn".
+
+#### Giới hạn thật của việc dời lịch — nói thẳng
+
+Dịch chuyển là ở mức **DB**. `reference_sheets/` là bản gốc của khách hàng với ngày 2019
+và **không được sửa**. Nên **nạp lại từ hồ sơ gốc sẽ đưa ngày cũ trở lại** cho dự án đó.
+Đây là đánh đổi đã chọn; bài kiểm chỉ canh phần DB và giờ kiểm tra riêng rằng bài kiểm
+không để lại dự án tạm.
+
 ### 12.1 Đã xác minh bằng đọc mã, CHƯA sửa — nên sửa trước khi lên máy thật
 
 > ℹ️ Bảng này **đã cũ một phần**: 5 mục từng nằm đây đã được sửa ở đợt 14 và kiểm lại
