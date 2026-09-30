@@ -25,10 +25,18 @@ docker compose up --build
 # 1. Postgres ở 127.0.0.1:5433 (user/pass/db: pmo_user/pmo_dev_pwd/pmo)
 ./backend/scripts/pg-ctl.sh start        # Linux/WSL — hoặc dùng Postgres sẵn có
 
-# 2. Cài + migrate + chạy
+# 2. Cài + migrate + seed
 npm install
-node backend/src/db/init.js              # migrate (có ledger) + seed demo
-npm run dev                              # backend :3000 + frontend :5173 (HMR)
+cd backend
+node src/db/init.js                    # đọc backend/.env; migrate + seed demo
+
+# 3. Chạy hai terminal
+# Terminal 1: giữ nguyên thư mục backend
+PORT=3000 LOGIN_RATE_MAX=1000 node src/index.js
+
+# Terminal 2: mở terminal mới, quay về thư mục gốc
+cd ..
+npm run dev:frontend
 ```
 
 ### Cách 3 — Production một cổng
@@ -66,9 +74,9 @@ Tất cả tài khoản dùng chung mật khẩu dev: **`admin123`**.
 | `site@hbg.com` | Site — báo cáo ngày, ảnh, vật tư, nhân lực (mobile) |
 | `procurement@hbg.com` | Procurement — vật tư, hợp đồng |
 | `accounting@hbg.com` | Accounting — chuỗi thanh toán |
+| `technical@hbg.com` | Technical — shopdrawing và hạng mục được giao |
 
-Tenant pilot (gói Small, để kiểm chứng đa tenant): **`admin@pilot.test`** / `admin123`
-— chỉ thấy project `PILOT-001`, không có AR, không cấu hình chain, không bulk import.
+Tenant pilot (gói Small, để kiểm chứng đa tenant) được tạo khi cần bằng lệnh `node backend/scripts/provision-tenant.mjs --code PILOT --plan small --admin-email admin@pilot.test --project PILOT-001`. Tài khoản **`admin@pilot.test`** / **`admin123`** chỉ thấy project `PILOT-001`, không có AR, không cấu hình chain, không bulk import.
 
 ## 2b. Gói Small / Mid / Enterprise (4 trụ cột)
 
@@ -80,7 +88,7 @@ Tenant pilot (gói Small, để kiểm chứng đa tenant): **`admin@pilot.test`
 | P4 AP 4-step (hợp đồng → invoice → PR → chi) | ✅ (không AR) | ✅ + đọc AR | ✅ + AR full |
 | Nén tiến độ (Enterprise) | — | — | ✅ preview → apply → rollback |
 | Trợ lý AI (Enterprise) | — | — | ✅ hỏi đáp trích dẫn + đề xuất SLA |
-| Thư viện BIM (Enterprise) | — | — | ✅ lưu IFC + metadata (chưa viewer) |
+| Thư viện BIM (Enterprise) | — | — | ✅ lưu IFC + metadata + viewer web-ifc |
 | ERP round-trip (Enterprise) | — | — | ✅ xuất AP CSV + đối soát NCC + đẩy SFTP |
 | Issues / directives | ✅ issues | ✅ + directives | ✅ |
 | Portfolio, audit export, bulk Excel, KPI targets | — | portfolio đọc | ✅ |
@@ -95,7 +103,7 @@ HBG = Enterprise (đầy đủ, tương thích mọi test cũ).
 | **Admin** | Mọi thứ: users, departments, chain duyệt, master data |
 | **CEO** | Duyệt thanh toán/PR, đóng–mở dự án, xem toàn cảnh, nhận escalate |
 | **PM** | Nhập tiến độ, tạo issue/directive, duyệt shop + submittal (dự án mình), nghiệm thu ngày |
-| **PMO** | Xem mọi dự án, KPI targets, master data; không duyệt nghiệp vụ |
+| **PMO** | Xem các dự án được giao, KPI targets, governance; không duyệt nghiệp vụ |
 | **Site** | Báo cáo ngày + ảnh, cập nhật % tiến độ được giao, dùng vật tư |
 | **Procurement** | Nhà cung cấp, vật tư, hợp đồng |
 | **Accounting** | Invoice, payment request, thanh toán, công nợ phải thu (AR) |
@@ -126,7 +134,7 @@ Phân quyền thực thi ở server (`permissionMiddleware` + membership dự á
 - Audit log mọi hành động (ai/lúc nào/trước–sau).
 - Master data: vendors, subcontractors, teams, departments, chains…
 - Migration có ledger + checksum (sai lệch schema → từ chối boot).
-- Test: ~75 suites E2E (`tests/e2e/`), gồm `pipeline-guard` chạy full pipeline trên DB scratch — CI-safe.
+- Test: `npm test` chạy 4 suite CI; `npm run test:srs` chạy các suite trọng tâm; các suite E2E khác nằm trong `tests/e2e/`.
 
 ---
 
@@ -135,19 +143,18 @@ Phân quyền thực thi ở server (`permissionMiddleware` + membership dự á
 ```
 pmo_project/
 ├── backend/src/
-│   ├── index.js            # Express: 24 routers + static frontend + shutdown an toàn
-│   ├── lib/                # 18 helpers (auth JWT, transitions, approval chains,
-│   │                       #   permissions, txAudit, storage, sync-apply…)
-│   ├── routes/             # 26 files theo domain
-│   ├── services/ingest/    # 12 parsers Excel
+│   ├── index.js            # Express: route composition + static frontend + safe shutdown
+│   ├── lib/                # auth, permissions, transitions, audit, storage và các module SRS
+│   ├── routes/             # router theo domain
+│   ├── services/ingest/    # các parser Excel
 │   └── db/                 # pool PG duy nhất, migrate ledger, seed
-├── backend/drizzle/        # 13 migrations (0000…0003, 9991…9999)
+├── backend/drizzle/        # migration ledger hiện tại
 ├── frontend/src/
-│   ├── hq/                 # 13 màn hình HQ (ControlCenter, Payment, Shop…)
+│   ├── hq/                 # các màn hình nghiệp vụ (Control Center, Payment, Shop…)
 │   ├── field/              # App công trường
 │   ├── governance/         # Approval, Audit, Cấu hình duyệt, Master data
 │   └── api/                # client (tự refresh JWT, FormData upload)
-├── tests/e2e/              # ~75 suites + lib.mjs dùng chung + cleanup-demo.mjs
+├── tests/e2e/              # các suite E2E dùng chung + cleanup-demo.mjs
 ├── docs/                   # tài liệu kỹ thuật + SRS (xem dưới)
 ├── Dockerfile · docker-compose.yml · docker-entrypoint.sh · .env.example
 ```
@@ -186,6 +193,6 @@ Gặp sự cố (`EADDRINUSE`, mất kết nối PG, drift schema): xem Troubles
 ## 8. Tài liệu chi tiết
 
 **[docs/PRODUCT_TECHNICAL_DOCUMENTATION.md](docs/PRODUCT_TECHNICAL_DOCUMENTATION.md)** — đặc tả kỹ thuật đầy đủ, súc tích:
-kiến trúc & vòng đời request, data model (51 bảng), tham chiếu backend (24 routers, 18 libs),
+kiến trúc & vòng đời request, data model (bảng và migration hiện tại), tham chiếu backend (router, lib),
 frontend, auth & phân quyền, 7 workflow nghiệp vụ, triển khai, backup và API.
 Sơ đồ UML (mermaid + PNG): **[docs/srs/](docs/srs/)**.

@@ -3,29 +3,63 @@
 // Synthetic workbooks only (shapes copied from step1-01/02 + daily-wizard) —
 // no /mnt/c paths, no dev-DB mutation. Drops the scratch DB afterwards.
 // Run: node tests/e2e/pipeline-guard.mjs
+import { waitForServer } from './lib.mjs';
 import { execSync, spawn } from 'node:child_process';
 import { writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { userInfo } from 'node:os';
 const XLSX = (await import('xlsx')).default;
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
-const PG = { host: '127.0.0.1', port: process.env.PGPORT || '5433', user: 'pmo_user', password: 'pmo_dev_pwd' };
-const DBNAME = 'pmo_pipeline';
+const PG = { host: process.env.PGHOST || '127.0.0.1', port: process.env.PGPORT || '5433', user: process.env.PGUSER || 'pmo_user', password: process.env.PGPASSWORD || 'pmo_dev_pwd' };
+const ADMIN_PG = {
+  host: process.env.PGHOST_ADMIN || (process.env.PGUSER_ADMIN ? PG.host : '/tmp'),
+  port: process.env.PGPORT_ADMIN || PG.port,
+  user: process.env.PGUSER_ADMIN || process.env.USER || userInfo().username,
+};
+const DBNAME = process.env.PIPELINE_DBNAME || 'pmo_pipeline';
 const FRESH_URL = `postgresql://${PG.user}:${PG.password}@${PG.host}:${PG.port}/${DBNAME}`;
-const BASE = 'http://localhost:3244';
-const ROOT = '/home/vutun/pmo_project';
+const PORT = Number(process.env.PIPELINE_PORT || 3244);
+const BASE = process.env.BASE_URL || `http://127.0.0.1:${PORT}`;
+const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const sh = (cmd, env = {}) => execSync(cmd, { encoding: 'utf8', cwd: ROOT, env: { ...process.env, ...env }, timeout: 180000 });
 
 // --- scratch DB ---
-execSync(`psql -h /tmp -p ${PG.port} -U vutun -d postgres -c "DROP DATABASE IF EXISTS ${DBNAME};"`, { encoding: 'utf8' });
-execSync(`psql -h /tmp -p ${PG.port} -U vutun -d postgres -c "CREATE DATABASE ${DBNAME} OWNER ${PG.user};"`, { encoding: 'utf8' });
+execSync(`${process.env.PSQL_BIN || 'psql'} -h ${ADMIN_PG.host} -p ${ADMIN_PG.port} -U ${ADMIN_PG.user} -d postgres -c "DROP DATABASE IF EXISTS ${DBNAME};"`, { encoding: 'utf8' });
+execSync(`psql -h ${ADMIN_PG.host} -p ${ADMIN_PG.port} -U ${ADMIN_PG.user} -d postgres -c "CREATE DATABASE ${DBNAME} OWNER ${PG.user};"`, { encoding: 'utf8' });
 sh('node backend/src/db/init.js', { DATABASE_URL: FRESH_URL });
 ok(true, 'scratch DB init ok');
 
-const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: FRESH_URL, PORT: '3244' }, stdio: 'ignore', cwd: ROOT });
-await new Promise(r => setTimeout(r, 3500));
+// Cấp quyền cho **app role** trên database sạt.
+//
+// Vì sao cần: request pool chạy bằng role riêng (`APP_DB_USER`, mặc định `pmo_app` —
+// least privilege, xem `deploy/production/00-backup-role.sh` cho mẫu cấp quyền của
+// `pmo_backup`). Grant **gắn theo database**, nên role có quyền trên `pmo` chưa chắc
+// có trên `pmo_pipeline` mới tạo. Không cấp thì mọi request của server sạt trả
+// `500 permission denied for table …` — đo 2026-09-28: `GET /api/dashboard` trả
+// `500 permission denied for table health_thresholds` trên DB sạch, trong khi gate
+// (chạy trên DB dev) không bao giờ thấy.
+//
+// Nhân vật chạy ở đây là **admin** (migrate/seed) — đúng vai trò mà lệnh cấp quyền
+// chạy ngoài đời, không phải app role.
+{
+  const appUser = process.env.APP_DB_USER || 'pmo_app';
+  const grant = [
+    `GRANT CONNECT ON DATABASE ${DBNAME} TO ${appUser};`,
+    `GRANT USAGE ON SCHEMA public TO ${appUser};`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${appUser};`,
+    `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${appUser};`,
+  ].join(' ');
+  execSync(`psql -h ${ADMIN_PG.host} -p ${ADMIN_PG.port} -U ${ADMIN_PG.user} -d ${DBNAME} -c "${grant}"`, { encoding: 'utf8' });
+  ok(true, `app role ${appUser} được cấp quyền trên ${DBNAME}`);
+}
 
-const qp = (db, sql) => execSync(`PGPASSWORD=${PG.password} psql -h ${PG.host} -p ${PG.port} -U ${PG.user} -d ${db} -t -A -c "${sql.replace(/"/g, '\\"')}"`, { encoding: 'utf8' }).trim().split('\n')[0];
+const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: FRESH_URL, PORT: String(PORT), LOGIN_RATE_MAX: '1000' }, stdio: 'ignore', cwd: ROOT });
+await waitForServer(BASE);
+
+const qp = (db, sql) => execSync(`PGPASSWORD=${PG.password} ${process.env.PSQL_BIN || 'psql'} -h ${PG.host} -p ${PG.port} -U ${PG.user} -d ${db} -t -A -c "${sql.replace(/"/g, '\\"')}"`, { encoding: 'utf8' }).trim().split('\n')[0];
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) }).then(r => r.json());
   ok(!!login.token, 'login on scratch DB');
@@ -121,7 +155,7 @@ try {
   const pr = await post(`/api/invoices/${inv.j?.id}/payment-requests`, { request_no: 'PIPE-PR-1', amount: 90000 });
   const ap = await fetch(BASE + `/api/payment-requests/${pr.j?.id}`, { method: 'PUT', headers: J, body: JSON.stringify({ status: 'APPROVED' }) }).then(async r => ({ s: r.status, j: await r.json() }));
   const pay = await post(`/api/payment-requests/${pr.j?.id}/payments`, { paid_amount: 90000 });
-  ok(ct.j?.id && inv.j?.id && pr.j?.id && ap.s === 200 && pay.s === 200, 'contract→invoice→PR→approve→pay chain');
+  ok(ct.j?.id && inv.j?.id && pr.j?.id && ap.s === 200 && pay.s === 201, 'contract→invoice→PR→approve→pay chain');
   const prs = await get(`/api/projects/${PID}/payment-requests?limit=50`);
   ok(prs.some(p => p.status === 'PAID') && typeof prs[0]?.amount === 'number', 'PAID visible, amounts numeric');
 
@@ -140,7 +174,7 @@ try {
 }
 
 // --- drop scratch ---
-execSync(`psql -h /tmp -p ${PG.port} -U vutun -d postgres -c "DROP DATABASE IF EXISTS ${DBNAME};"`, { encoding: 'utf8' });
+execSync(`${process.env.PSQL_BIN || 'psql'} -h ${ADMIN_PG.host} -p ${ADMIN_PG.port} -U ${ADMIN_PG.user} -d postgres -c "DROP DATABASE IF EXISTS ${DBNAME};"`, { encoding: 'utf8' });
 ok(true, 'scratch database dropped');
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');

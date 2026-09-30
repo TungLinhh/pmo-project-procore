@@ -1,11 +1,14 @@
 // UI-004: Project Overview
 import { useEffect, useState } from 'react';
+import { isComplete, isOverdue } from '../utils/progress.js';
 import { useParams, useNavigate } from 'react-router-dom';
 import { projects, construction, shopApi, exportApi, getToken, getUser, masterData } from '../api/index.js';
 import { toast } from '../components/Toast.jsx';
 import { ICON } from '../icons.jsx';
+import { t, th, useLang } from '../i18n/index.js';
 
 export default function ProjectOverview() {
+  useLang(); // re-render table headers on VI/EN toggle
   const { id } = useParams();
   const nav = useNavigate();
   const [project, setProject] = useState(null);
@@ -19,11 +22,15 @@ export default function ProjectOverview() {
     projects.list().then(list => {
       const p = list.find(x => x.id === Number(id));
       setProject(p);
-    });
+    }).catch((e) => toast.error(t('ov.err_projects') + e.message));
     if (canEdit) masterData.departments().then(setDepartments).catch(() => {});
     if (id) {
-      construction.schedule(id).then(setSchedule);
-      shopApi.drawings(id).then(setShopData);
+      construction.schedule(id)
+        .then(setSchedule)
+        .catch((e) => toast.error(t('ov.err_schedule') + e.message));
+      shopApi.drawings(id)
+        .then(setShopData)
+        .catch((e) => toast.error(t('ov.err_shop') + e.message));
     }
   }, [id]);
 
@@ -31,8 +38,8 @@ export default function ProjectOverview() {
     try {
       const updated = await projects.update(id, { department_id: departmentId ? Number(departmentId) : null });
       setProject(updated);
-      toast.success('Đã gán bộ phận');
-    } catch (e) { toast.error('Lỗi: ' + e.message); }
+      toast.success(t('ov.toast_dept_set'));
+    } catch (e) { toast.error(t('ov.err_load') + e.message); }
   }
 
   function openSchedule() {
@@ -42,28 +49,28 @@ export default function ProjectOverview() {
     try {
       const url = exportApi.constructionSchedule(id);
       const r = await fetch(url, { headers: { Authorization: `Bearer ${getToken()}` }});
-      if (!r.ok) throw new Error('Export thất bại: ' + r.status);
+      if (!r.ok) throw new Error(t('ov.err_export_failed') + r.status);
       const blob = await r.blob();
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = `construction-schedule-${project?.code || id}.xlsx`;
       a.click();
-      URL.revokeObjectURL(a.href);
-      toast.success('Đã tải về ' + a.download);
+      setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+      toast.success(t('ov.toast_downloaded') + a.download);
     } catch (e) {
-      toast.error('Export lỗi: ' + e.message);
+      toast.error(t('ov.err_export') + e.message);
     }
   }
 
-  if (!project) return <div className="empty">Loading...</div>;
+  if (!project) return <div className="empty">{t('g.loading')}</div>;
 
   const byZone = {};
   schedule.forEach(s => {
     if (!byZone[s.zone_code]) byZone[s.zone_code] = { total: 0, done: 0, inProgress: 0, overdue: 0, items: [] };
     byZone[s.zone_code].total++;
-    if ((s.progress_pct || 0) >= 1) byZone[s.zone_code].done++;
+    if (isComplete(s)) byZone[s.zone_code].done++;
     else byZone[s.zone_code].inProgress++;
-    if (s.plan_end_date && new Date(s.plan_end_date) < new Date() && (s.progress_pct || 0) < 1) byZone[s.zone_code].overdue++;
+    if (isOverdue(s)) byZone[s.zone_code].overdue++;
     byZone[s.zone_code].items.push(s);
   });
 
@@ -81,7 +88,7 @@ export default function ProjectOverview() {
             Bộ phận:{' '}
             {canEdit ? (
               <select value={project.department_id || ''} onChange={e => setDept(e.target.value)} style={{ fontSize: 12 }}>
-                <option value="">— chưa gán —</option>
+                <option value="">{t('ov.unassigned')}</option>
                 {departments.map(d => <option key={d.id} value={d.id}>{d.code} · {d.name_vi}</option>)}
               </select>
             ) : (
@@ -90,26 +97,25 @@ export default function ProjectOverview() {
           </div>
         </div>
         <div className="page-header-right">
-          <button className="btn btn-secondary" onClick={openSchedule}><ICON.calendar size={13} />Schedule</button>
-          {exportApi.ENABLED && <button className="btn" onClick={doExport}><ICON.download size={13} />Export</button>}
+          <button className="btn btn-secondary" onClick={openSchedule}><ICON.calendar size={13} />{t('g.schedule')}</button>
+          {exportApi.ENABLED && <button className="btn" onClick={doExport}><ICON.download size={13} />{t('g.export')}</button>}
         </div>
       </div>
 
       <div className="stat-strip">
-        <div className="stat"><div className="label">Total items</div><div className="value">{totalItems}</div></div>
-        <div className="stat"><div className="label">Completed</div><div className="value" style={{ color: 'var(--c-on-track)' }}>{totalDone}</div></div>
-        <div className="stat"><div className="label">In progress</div><div className="value" style={{ color: 'var(--c-watch)' }}>{totalItems - totalDone}</div></div>
-        <div className="stat"><div className="label">Overdue</div><div className="value" style={{ color: 'var(--c-behind)' }}>{totalOverdue}</div></div>
-        <div className="stat"><div className="label">Shop drawings</div><div className="value">{shopData.length}</div></div>
-        <div className="stat"><div className="label">Approved</div><div className="value" style={{ color: 'var(--c-on-track)' }}>{shopData.filter(s => s.approval_date).length}</div></div>
-        <div className="stat"><div className="label">Zones</div><div className="value">{Object.keys(byZone).length}</div></div>
+        <div className="stat"><div className="label">{t('po.total_items')}</div><div className="value">{totalItems}</div></div>
+        <div className="stat"><div className="label">{t('g.completed')}</div><div className="value" style={{ color: 'var(--c-on-track)' }}>{totalDone}</div></div>
+        <div className="stat"><div className="label">{t('po.in_progress')}</div><div className="value" style={{ color: 'var(--c-watch)' }}>{totalItems - totalDone}</div></div>
+        <div className="stat"><div className="label">{t('g.overdue')}</div><div className="value" style={{ color: 'var(--c-behind)' }}>{totalOverdue}</div></div>
+        <div className="stat"><div className="label">{t('po.shop_drawings')}</div><div className="value">{shopData.length}</div></div>
+        <div className="stat"><div className="label">{t('g.approved')}</div><div className="value" style={{ color: 'var(--c-on-track)' }}>{shopData.filter(s => s.approval_date).length}</div></div>
+        <div className="stat"><div className="label">{t('g.zones')}</div><div className="value">{Object.keys(byZone).length}</div></div>
       </div>
 
       <div className="section">
         <div className="section-title">
-          <span>Zones ({Object.keys(byZone).length})</span>
-          <button className="btn btn-secondary btn-sm" onClick={() => nav(`/hq/progress?project=${id}`)}>
-            Mở Progress Detail <ICON.arrow size={11} />
+          <span>{t('g.zones')} ({Object.keys(byZone).length})</span>
+          <button className="btn btn-secondary btn-sm" onClick={() => nav(`/hq/progress?project=${id}`)}>{t('ov.btn_open_detail')}<ICON.arrow size={11} />
           </button>
         </div>
         <div className="data-table">
@@ -117,13 +123,13 @@ export default function ProjectOverview() {
             <table>
               <thead>
                 <tr>
-                  <th>Zone</th>
-                  <th className="num">Items</th>
-                  <th className="num">Done</th>
-                  <th className="num">In progress</th>
-                  <th className="num">Overdue</th>
-                  <th>Progress</th>
-                  <th>Health</th>
+                  <th>{th("Khu vực")}</th>
+                  <th className="num">{th("Hạng mục")}</th>
+                  <th className="num">{th("Xong")}</th>
+                  <th className="num">{th("Đang thực hiện")}</th>
+                  <th className="num">{th("Quá hạn")}</th>
+                  <th>{th("Tiến độ")}</th>
+                  <th>{th("Sức khỏe")}</th>
                 </tr>
               </thead>
               <tbody>

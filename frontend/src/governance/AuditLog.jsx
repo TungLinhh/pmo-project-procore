@@ -3,20 +3,23 @@
 // Click vào row → expand before/after JSON
 
 import { useEffect, useState, Fragment } from 'react';
-import { getToken } from '../api/index.js';
+import { getToken, audit as auditApi } from '../api/index.js';
+import { toast } from '../components/Toast.jsx';
+import { formatApiDate, parseApiDate } from '../utils/datetime.js';
+import { t, th, useLang } from '../i18n/index.js';
+import { useServerPage } from '../hooks/usePagination.js';
+import TablePagination from '../components/TablePagination.jsx';
 
 function authHeaders() {
   const t = getToken();
   return t ? { Authorization: `Bearer ${t}` } : {};
 }
 
-async function fetchAudit(filters) {
-  const params = new URLSearchParams();
-  Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
-  params.set('limit', '200');
-  const res = await fetch(`/api/audit?${params}`, { headers: authHeaders() });
-  if (!res.ok) throw new Error('fetch failed');
-  return res.json();
+// Nhật ký demo có gần 7.000 dòng. Trước đây màn này tải một lần 200 dòng rồi
+// hiện, nên 97% nhật ký không bao giờ xuất hiện mà không có dấu hiệu gì — người
+// dùng tưởng hệ thống chỉ ghi bấy nhiêu đó. Nay phân trang thật ở server.
+async function fetchAudit(filters, pageParams) {
+  return auditApi.listPage({ ...filters, ...pageParams });
 }
 
 async function exportAudit(format, filters) {
@@ -26,56 +29,73 @@ async function exportAudit(format, filters) {
     params.set('format', format);
     Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
     const res = await fetch(`/api/audit/export?${params}`, { headers: authHeaders() });
-    if (!res.ok) { alert('Export failed'); return; }
+    if (!res.ok) { toast.error(t('aud.export_failed')); return; }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `audit-${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.${format}`;
+    a.download = `audit-${new Date().toLocaleString('sv-SE').replace(/[:]/g, '-')}.${format}`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   } catch (e) {
-    alert('Export failed: ' + e.message);
+    toast.error(t('aud.err_export') + e.message);
   }
 }
 
 const ACTION_COLORS = {
   CREATE: '#10b981', UPDATE: '#3b82f6', STATUS_CHANGE: '#f59e0b',
-  APPROVE: '#10b981', REJECT: '#ef4444', DIRECTIVE: '#8b5cf6',
-  ARCHIVE: '#6b7280', RESTORE: '#3b82f6',
+  APPROVE: '#10b981', REJECT: '#ef4444', DIRECTIVE: '#a78bfa',
+  ARCHIVE: '#94a3b8', RESTORE: '#60a5fa',
 };
 
 export default function AuditLog() {
+  useLang(); // re-render table headers on VI/EN toggle
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(null);
+  const [loadError, setLoadError] = useState('');
   const [filters, setFilters] = useState({
     project_id: '', resource_type: '', action: '', user_id: '', search: '', from: '', to: '',
   });
 
+  const [total, setTotal] = useState(null);
+  const page = useServerPage(total, { initialSize: 50 });
+
   const load = async () => {
     setLoading(true);
     try {
-      const r = await fetchAudit(filters);
+      const { rows: r, total: t } = await fetchAudit(filters, page.params);
       setRows(r);
-    } catch (e) { console.error(e); }
+      setTotal(t);
+      setLoadError('');
+    } catch (e) {
+      setRows([]);
+      setTotal(null);
+      setLoadError(e.message || t('aud.load_failed'));
+      toast.error(t('aud.err_load_short') + e.message);
+    }
     setLoading(false);
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+  // Một effect duy nhất cho cả lần đầu lẫn khi đổi trang/bộ lọc — tách làm hai
+  // thì lúc mở trang sẽ bắn hai request trùng nhau.
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [page.page, page.pageSize, filters]);
+  // Bộ lọc mới thì tổng thay đổi theo → về trang 1, không thì trang 40 sẽ trống.
+  useEffect(() => { page.setPage(1); /* eslint-disable-next-line */ }, [filters]);
 
   const setF = (k, v) => setFilters(f => ({ ...f, [k]: v }));
   const clearF = () => setFilters({ project_id: '', resource_type: '', action: '', user_id: '', search: '', from: '', to: '' });
 
-  const today = rows.filter(r => new Date(r.created_at).toDateString() === new Date().toDateString()).length;
+  const todayKey = new Date().toDateString();
+  const today = rows.filter((r) => parseApiDate(r.created_at)?.toDateString() === todayKey).length;
   const critical = rows.filter(r => ['STATUS_CHANGE', 'REJECT', 'DIRECTIVE', 'ARCHIVE'].includes(r.action)).length;
 
   return (
     <div>
       <div className="page-header">
         <div>
-          <h1>Audit Log</h1>
-          <div className="meta">Lịch sử thay đổi dữ liệu · full JSON snapshot (before/after)</div>
+          <h1>{t('aud.h1')}</h1>
+          <div className="meta">{t('aud.subtitle')}</div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn-secondary" onClick={() => exportAudit('csv', filters)}>📥 Export CSV</button>
@@ -84,27 +104,32 @@ export default function AuditLog() {
       </div>
 
       <div className="stat-strip">
-        <div className="stat"><div className="label">Total events</div><div className="value">{rows.length}</div></div>
-        <div className="stat"><div className="label">Today</div><div className="value">{today}</div></div>
-        <div className="stat"><div className="label">Critical actions</div><div className="value">{critical}</div></div>
+        <div className="stat"><div className="label">{t('aud.total_events')}</div><div className="value">{rows.length}</div></div>
+        <div className="stat"><div className="label">{t('g.today')}</div><div className="value">{today}</div></div>
+        <div className="stat"><div className="label">{t('aud.critical_actions')}</div><div className="value">{critical}</div></div>
       </div>
 
       <div className="filter-bar" style={{ flexWrap: 'wrap' }}>
-        <input placeholder="Search note/user..." value={filters.search} onChange={e => setF('search', e.target.value)} style={{ width: 200 }} />
-        <input placeholder="Project ID" value={filters.project_id} onChange={e => setF('project_id', e.target.value)} style={{ width: 110 }} />
-        <input placeholder="Resource type" value={filters.resource_type} onChange={e => setF('resource_type', e.target.value)} style={{ width: 150 }} />
-        <input placeholder="Action" value={filters.action} onChange={e => setF('action', e.target.value)} style={{ width: 130 }} />
-        <input placeholder="User ID" value={filters.user_id} onChange={e => setF('user_id', e.target.value)} style={{ width: 100 }} />
-        <label>From <input type="date" value={filters.from} onChange={e => setF('from', e.target.value)} /></label>
-        <label>To <input type="date" value={filters.to} onChange={e => setF('to', e.target.value)} /></label>
-        <button className="btn-primary" onClick={load} disabled={loading}>{loading ? 'Đang tải...' : '🔍 Lọc'}</button>
-        <button className="btn-text" onClick={clearF}>Clear</button>
+        <input placeholder={t('aud.ph_search_user')} value={filters.search} onChange={e => setF('search', e.target.value)} style={{ width: 200 }} />
+        <input placeholder={t('aud.ph_project_id')} value={filters.project_id} onChange={e => setF('project_id', e.target.value)} style={{ width: 110 }} />
+        <input placeholder={t('aud.ph_resource_type')} value={filters.resource_type} onChange={e => setF('resource_type', e.target.value)} style={{ width: 150 }} />
+        <input placeholder={t('aud.ph_action')} value={filters.action} onChange={e => setF('action', e.target.value)} style={{ width: 130 }} />
+        <input placeholder={t('aud.ph_user_id')} value={filters.user_id} onChange={e => setF('user_id', e.target.value)} style={{ width: 100 }} />
+        <label>{t('g.from')} <input type="date" value={filters.from} onChange={e => setF('from', e.target.value)} /></label>
+        <label>{t('g.to')} <input type="date" value={filters.to} onChange={e => setF('to', e.target.value)} /></label>
+        <button className="btn-primary" onClick={load} disabled={loading}>{loading ? t('aud.busy_loading') : t('aud.filter_label')}</button>
+        <button className="btn-text" onClick={clearF}>{t('g.clear')}</button>
       </div>
 
-      {rows.length === 0 && !loading && (
-        <div className="empty" style={{ padding: 60 }}>
-          Không có audit log nào. Thử upload file hoặc thực hiện 1 action (transition shop drawing, tạo issue).
+      {loadError && !loading && (
+        <div className="empty gate-error" style={{ padding: 40 }}>
+          <strong>{t('aud.load_failed')}</strong>
+          <div style={{ marginTop: 6 }}>{loadError}</div>
+          <button className="btn" style={{ marginTop: 12 }} onClick={load}>{t('aud.btn_retry')}</button>
         </div>
+      )}
+      {!loadError && rows.length === 0 && !loading && (
+        <div className="empty" style={{ padding: 60 }}>{t('aud.empty_hint2')}</div>
       )}
 
       {rows.length > 0 && (
@@ -112,12 +137,12 @@ export default function AuditLog() {
           <thead>
             <tr>
               <th style={{ width: 30 }}></th>
-              <th>Time</th>
-              <th>Action</th>
-              <th>Resource</th>
-              <th>Context</th>
-              <th>Actor</th>
-              <th>Note</th>
+              <th>{th("Thời gian")}</th>
+              <th>{th("Hành động")}</th>
+              <th>{th("Tài nguyên")}</th>
+              <th>{th("Ngữ cảnh")}</th>
+              <th>{th("Người thực hiện")}</th>
+              <th>{th("Ghi chú")}</th>
             </tr>
           </thead>
           <tbody>
@@ -125,9 +150,13 @@ export default function AuditLog() {
               <Fragment key={r.id}>
                 <tr style={{ cursor: 'pointer' }} onClick={() => setExpanded(expanded === r.id ? null : r.id)}>
                   <td>{expanded === r.id ? '▼' : '▶'}</td>
-                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{new Date(r.created_at).toLocaleString('vi-VN')}</td>
+                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{formatApiDate(r.created_at)}</td>
                   <td>
-                    <span style={{ background: ACTION_COLORS[r.action] || '#6b7280', color: 'white', padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
+                    <span
+                      className="audit-action-chip"
+                      data-action={r.action}
+                      style={{ background: ACTION_COLORS[r.action] || '#94a3b8' }}
+                    >
                       {r.action}
                     </span>
                   </td>
@@ -137,7 +166,7 @@ export default function AuditLog() {
                     {r.context?.zone_id && <span>· z={r.context.zone_id} </span>}
                     {r.context?.issue_id && <span>· issue#{r.context.issue_id}</span>}
                   </td>
-                  <td style={{ fontSize: 12 }}>{r.user_name} <span style={{ color: '#6b7280' }}>({r.actor_role})</span></td>
+                  <td style={{ fontSize: 12 }}>{r.user_name} <span className="actor-role">({r.actor_role})</span></td>
                   <td style={{ fontSize: 12, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.note}</td>
                 </tr>
                 {expanded === r.id && (
@@ -172,6 +201,17 @@ export default function AuditLog() {
             ))}
           </tbody>
         </table>
+      )}
+      {!loading && !loadError && (
+        <TablePagination
+          page={page.page}
+          pageCount={page.pageCount}
+          total={page.total || 0}
+          pageSize={page.pageSize}
+          onPageChange={page.setPage}
+          onPageSizeChange={page.changePageSize}
+          unitKey="unit.log"
+        />
       )}
     </div>
   );

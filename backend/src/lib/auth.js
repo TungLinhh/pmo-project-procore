@@ -5,7 +5,7 @@
 // - Refresh: opaque random, sha256-hashed at rest, single-use rotation, 30d TTL.
 // - Revocation: per-token (auth_revoked_jti denylist) + per-user (token_version bump).
 import jwt from 'jsonwebtoken';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, randomUUID } from 'node:crypto';
 import { getDb } from '../db/index.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-change-me';
@@ -29,34 +29,79 @@ export function issueAccess(user) {
   );
 }
 
-export async function createRefreshToken(userId) {
+export async function createRefreshToken(userId, familyId = null) {
   const db = getDb();
   const raw = randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + REFRESH_TTL_MS);
+  // A rotated token inherits its chain's family so a later replay can revoke
+  // the whole chain. A login starts a new family.
+  const family = familyId || randomUUID();
   await db.prepare(
-    'INSERT INTO auth_refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)'
-  ).runAsync(userId, sha256(raw), expiresAt.toISOString().slice(0, 19).replace('T', ' '));
+    'INSERT INTO auth_refresh_tokens (user_id, token_hash, family_id, expires_at) VALUES (?, ?, ?, ?)'
+  ).runAsync(userId, sha256(raw), family, expiresAt.toISOString().slice(0, 19).replace('T', ' '));
   return raw;
 }
+
+// How long after a rotation a replay of the same token is still treated as a
+// benign race (two tabs refreshing together) rather than a stolen token.
+const REFRESH_REUSE_GRACE_MS = Math.max(0, Number(process.env.REFRESH_REUSE_GRACE_MS) || 10_000);
 
 // Single-use rotation: consumes `raw`, returns { user, refresh } or null.
 export async function rotateRefresh(raw) {
   if (!raw) return null;
   const db = getDb();
-  const row = await db.prepare(
-    `SELECT rt.id AS rt_id, rt.revoked_at AS rt_revoked, rt.expires_at AS rt_exp,
-            u.id AS user_id, u.email, u.name, u.role, u.is_ceo, u.tenant_id, u.token_version
-     FROM auth_refresh_tokens rt JOIN users u ON u.id = rt.user_id WHERE rt.token_hash = ?`
+  // Claim the refresh row atomically. Two concurrent requests can both pass a
+  // prior SELECT, but only one can win this conditional UPDATE.
+  const claim = await db.prepare(
+    `UPDATE auth_refresh_tokens
+     SET revoked_at = now()
+     WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > now()
+     RETURNING id, user_id, family_id`
   ).getAsync(sha256(raw));
-  // NOTE: never SELECT rt.*, u.* here — duplicate `id` collapses to users.id
-  // and the revoke below would hit the wrong refresh row.
-  if (!row || row.rt_revoked || new Date(row.rt_exp).getTime() <= Date.now()) return null;
-  await db.prepare('UPDATE auth_refresh_tokens SET revoked_at = now() WHERE id = ?').runAsync(row.rt_id);
-  const refresh = await createRefreshToken(row.user_id);
+  if (!claim) {
+    await detectRefreshReuse(raw);
+    return null;
+  }
+  const user = await db.prepare(
+    'SELECT id, email, name, role, is_ceo, tenant_id, token_version FROM users WHERE id = ?'
+  ).getAsync(claim.user_id);
+  if (!user) return null;
+  const refresh = await createRefreshToken(user.id, claim.family_id);
   return {
-    user: { id: row.user_id, email: row.email, name: row.name, role: row.role, is_ceo: !!row.is_ceo, tenant_id: row.tenant_id, token_version: row.token_version ?? 0 },
+    user: { id: user.id, email: user.email, name: user.name, role: user.role, is_ceo: !!user.is_ceo, tenant_id: user.tenant_id, token_version: user.token_version ?? 0 },
     refresh,
   };
+}
+
+// Reuse detection: a token that was already consumed is either a race (within
+// the grace window) or a stolen chain. Anything older revokes the whole family,
+// bumps token_version so live access tokens die too, and leaves an audit row.
+async function detectRefreshReuse(raw) {
+  const db = getDb();
+  const row = await db.prepare(
+    'SELECT id, user_id, family_id, revoked_at FROM auth_refresh_tokens WHERE token_hash = ?'
+  ).getAsync(sha256(raw));
+  if (!row || !row.revoked_at) return null;
+  const ageMs = Date.now() - new Date(row.revoked_at).getTime();
+  if (ageMs < REFRESH_REUSE_GRACE_MS) return null;   // benign race
+  const revoked = await db.prepare(
+    `UPDATE auth_refresh_tokens SET revoked_at = now()
+     WHERE user_id = ? AND family_id = ? AND revoked_at IS NULL`
+  ).runAsync(row.user_id, row.family_id);
+  const user = await db.prepare('SELECT tenant_id, name, email FROM users WHERE id = ?').getAsync(row.user_id);
+  if (user) {
+    // token_version invalidates outstanding access tokens for this user.
+    await db.prepare('UPDATE users SET token_version = token_version + 1 WHERE id = ?').runAsync(row.user_id);
+    await db.prepare(
+      `INSERT INTO audit_log (tenant_id, user_id, user_name, action, resource_type, resource_id, context, actor_role, note)
+       VALUES (?, ?, ?, 'REFRESH_TOKEN_REUSE', 'user', ?, ?::jsonb, 'system', ?)`
+    ).runAsync(
+      user.tenant_id, row.user_id, user.name, row.user_id,
+      JSON.stringify({ family_id: row.family_id, revoked_sessions: revoked.changes ?? 0, age_ms: Math.round(ageMs) }),
+      'Refresh token tái sử dụng sau khi đã xoay — đã thu hồi toàn bộ phiên của tài khoản',
+    ).catch(() => {});
+  }
+  return { userId: row.user_id, familyId: row.family_id, revokedSessions: revoked.changes ?? 0 };
 }
 
 export async function revokeRefresh(raw) {
@@ -84,6 +129,16 @@ export async function revokeAllSessions(userId) {
   await db.prepare('UPDATE auth_refresh_tokens SET revoked_at = now() WHERE user_id = ? AND revoked_at IS NULL').runAsync(userId);
 }
 
+// The session lookup shared by access tokens and stream tickets: fresh row,
+// denylist, and token_version (so logout-everywhere still applies).
+async function userForToken(payload) {
+  const db = getDb();
+  const user = await db.prepare('SELECT * FROM users WHERE id = ?').getAsync(payload.sub).catch(() => null);
+  if (!user) return null;
+  if ((user.token_version ?? 0) !== (payload.v ?? 0)) return null;
+  return user;
+}
+
 // Verify access token → fresh user row, or null. Never trusts payload roles.
 export async function verifyAccess(token) {
   if (!token) return null;
@@ -94,10 +149,47 @@ export async function verifyAccess(token) {
   const db = getDb();
   const denied = await db.prepare('SELECT 1 FROM auth_revoked_jti WHERE jti = ?').getAsync(payload.jti).catch(() => null);
   if (denied) return null;
-  const user = await db.prepare('SELECT * FROM users WHERE id = ?').getAsync(payload.sub).catch(() => null);
-  if (!user) return null;
-  if ((user.token_version ?? 0) !== (payload.v ?? 0)) return null;
-  return user;
+  // A stream ticket is audience-bound. jwt.verify without `audience` ignores the
+  // claim, so a ticket would otherwise work as a general bearer token for its
+  // whole TTL — check the marker explicitly.
+  if (payload.typ === 'stream' || payload.aud === 'stream') return null;
+  return userForToken(payload);
+}
+
+// ---- Stream tickets -------------------------------------------------------
+// EventSource cannot set an Authorization header, so the SSE handshake used to
+// carry the long-lived access token in the query string — where it lands in
+// nginx/Cloudflare access logs, proxy logs, browser history and Referer
+// headers. A ticket is a separate, deliberately weak credential: 45s to open
+// one stream, burned on first use, and rejected by every other endpoint
+// because of the `stream` audience. Burning goes through auth_revoked_jti so
+// single-use holds across instances, not just inside one process.
+export const STREAM_TICKET_TTL_SEC = Math.max(15, Number(process.env.STREAM_TICKET_TTL_SEC) || 45);
+
+export function issueStreamTicket(user) {
+  return jwt.sign(
+    { typ: 'stream', sub: user.id, v: user.token_version ?? 0 },
+    JWT_SECRET,
+    { expiresIn: STREAM_TICKET_TTL_SEC, audience: 'stream', jwtid: randomUUID() },
+  );
+}
+
+// Burn the ticket and resolve its user, or null. A replay hits the jti unique
+// index (the INSERT returns no row) and is refused.
+export async function consumeStreamTicket(ticket) {
+  if (!ticket) return null;
+  let payload;
+  try {
+    payload = jwt.verify(ticket, JWT_SECRET, { audience: 'stream' });
+  } catch { return null; }
+  if (payload.typ !== 'stream' || !payload.jti) return null;
+  const db = getDb();
+  const exp = new Date((payload.exp || 0) * 1000);
+  const burned = await db.prepare(
+    'INSERT INTO auth_revoked_jti (jti, expires_at) VALUES (?, ?) ON CONFLICT (jti) DO NOTHING'
+  ).runAsync(payload.jti, exp.toISOString().slice(0, 19).replace('T', ' ')).catch(() => null);
+  if (!burned || burned.changes !== 1) return null;   // replayed or already burned
+  return userForToken(payload);
 }
 
 // Backward-compat: set req.session.* (deprecated, use req.user.* instead)

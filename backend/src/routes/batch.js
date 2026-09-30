@@ -12,6 +12,7 @@
 //     directories) are recorded-or-skipped with a reason, never fatal
 import { Router } from 'express';
 import multer from 'multer';
+import { decodeUploadNames } from '../lib/upload-names.js';
 import { requireAuth } from '../lib/auth.js';
 import { permissionMiddleware } from '../lib/permission-middleware.js';
 import { getDb } from '../db/index.js';
@@ -25,7 +26,7 @@ const router = Router({ mergeParams: true });
 router.use(requireAuth);
 router.use(permissionMiddleware);
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
+const upload = decodeUploadNames(multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } }));
 
 export const BATCH_CAPS = {
   maxEntries: 500,
@@ -77,15 +78,15 @@ router.post('/batch', requireFeature('bulk-import'), upload.single('file'), asyn
     // own key), but hostile names are still recorded for review visibility.
     const slip = unsafeZipPath(name);
     if (slip) {
-      files.push(await recordSkip(db, req.user.tenant_id, sanitizeName(name), UPLOAD_STATUS.SKIPPED_FORMAT, `Zip-slip blocked: ${slip}`));
+      files.push(await recordSkip(db, req.user.tenant_id, sanitizeName(name), UPLOAD_STATUS.SKIPPED_FORMAT, `Zip-slip blocked: ${slip}`, req.user.id));
       continue;
     }
     if (entry.encrypted) {
-      files.push(await recordSkip(db, req.user.tenant_id, name, UPLOAD_STATUS.SKIPPED_FORMAT, 'Encrypted entry not supported'));
+      files.push(await recordSkip(db, req.user.tenant_id, name, UPLOAD_STATUS.SKIPPED_FORMAT, 'Encrypted entry not supported', req.user.id));
       continue;
     }
     if (entry.uncompressedSize > BATCH_CAPS.maxEntryBytes) {
-      files.push(await recordSkip(db, req.user.tenant_id, name, UPLOAD_STATUS.SKIPPED_FORMAT, `Entry >50MB (${entry.uncompressedSize} bytes)`));
+      files.push(await recordSkip(db, req.user.tenant_id, name, UPLOAD_STATUS.SKIPPED_FORMAT, `Entry >50MB (${entry.uncompressedSize} bytes)`, req.user.id));
       continue;
     }
     totalBytes += entry.uncompressedSize;
@@ -94,19 +95,19 @@ router.post('/batch', requireFeature('bulk-import'), upload.single('file'), asyn
     }
     const kind = classifyEntryType(name);
     if (kind.action === 'skip') {
-      files.push(await recordSkip(db, req.user.tenant_id, name, kind.status, kind.reason));
+      files.push(await recordSkip(db, req.user.tenant_id, name, kind.status, kind.reason, req.user.id));
       continue;
     }
     let content;
     try {
       content = extractZipEntry(req.file.buffer, entry);
     } catch (e) {
-      files.push(await recordSkip(db, req.user.tenant_id, name, UPLOAD_STATUS.SKIPPED_FORMAT, `Unreadable entry: ${e.message}`));
+      files.push(await recordSkip(db, req.user.tenant_id, name, UPLOAD_STATUS.SKIPPED_FORMAT, `Unreadable entry: ${e.message}`, req.user.id));
       continue;
     }
     const staged = await stageFile(db, {
       buffer: content, originalname: baseName(name), mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      relativePath: name, docType: detectDocType(baseName(name)), tenantId: req.user.tenant_id,
+      relativePath: name, docType: detectDocType(baseName(name)), tenantId: req.user.tenant_id, createdBy: req.user.id,
     });
     files.push({ upload_id: staged.upload_id, relative_path: name, original_filename: baseName(name), status: UPLOAD_STATUS.STAGED, skip_reason: null });
   }
@@ -118,15 +119,15 @@ function sanitizeName(p) {
   return String(p).replace(/\\/g, '/').split('/').filter(s => s && s !== '..').join('/').slice(-255) || 'unsafe-entry';
 }
 
-async function recordSkip(db, tenantId, relativePath, status, reason) {
+async function recordSkip(db, tenantId, relativePath, status, reason, createdBy = null) {
   const base = baseName(relativePath);
   // Skips carry no content: stage a zero-content marker row via direct insert
   // (saveFile requires a buffer; slip/oversize content is never written to disk).
   const row = await db.prepare(`
-    INSERT INTO file_uploads (tenant_id, original_filename, relative_path, status, skip_reason)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO file_uploads (tenant_id, original_filename, relative_path, status, skip_reason, created_by)
+    VALUES (?, ?, ?, ?, ?, ?)
     RETURNING id
-  `).getAsync(tenantId, base, relativePath, status, reason);
+  `).getAsync(tenantId, base, relativePath, status, reason, createdBy);
   return { upload_id: row.id, relative_path: relativePath, original_filename: base, status, skip_reason: reason };
 }
 

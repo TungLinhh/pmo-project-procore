@@ -45,15 +45,25 @@ out
 .cache
 
 # ===== Environment / secrets =====
+# Patterns here are matched against the build-context root, so a bare `.env`
+# does NOT cover nested env files. backend/.env would be copied by
+# `COPY backend/ ./backend/` and db/index.js auto-loads it as a fallback.
 .env
-.env.local
-.env.*.local
+**/.env
+**/.env.*
+backend/.env
 *.pem
+**/*.pem
 *.key
+**/*.key
 *.cert
+**/*.cert
 *.p12
+**/*.p12
 credentials.json
+**/credentials.json
 secrets.json
+**/secrets.json
 
 # ===== Local data (mounted as volume, not baked into image) =====
 data/

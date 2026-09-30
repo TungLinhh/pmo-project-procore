@@ -32,19 +32,16 @@ COPY backend/ ./backend/
 # Built frontend (served same-origin by Express)
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
-# Runtime dirs (uploads + data, NOT baked secrets)
-RUN mkdir -p /app/backend/data/uploads /app/data
+# Runtime dirs are writable only by the unprivileged runtime user.
+RUN mkdir -p /app/backend/uploads /app/backend/data/backups /app/data \
+    && chown -R node:node /app/backend/uploads /app/backend/data /app/data
 
-# Environment — read from compose/runner; defaults match buildDatabaseUrl()
-#   DATABASE_URL (if set) wins; otherwise DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME
-#   DB_HOST default is 'postgres' (compose service name), not 127.0.0.1
+# Runtime configuration comes from the deployment environment. No database
+# password or other secret is baked into the image.
 ENV NODE_ENV=production \
     PORT=3000 \
-    DB_HOST=postgres \
-    DB_PORT=5432 \
-    DB_NAME=pmo \
-    DB_USER=pmo_user \
-    DB_PASSWORD=pmo_dev_pwd
+    UPLOADS_DIR=/app/backend/uploads \
+    BACKUP_DIR=/app/backend/data/backups
 
 EXPOSE 3000
 
@@ -57,4 +54,5 @@ COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
+USER node
 CMD ["node", "backend/src/index.js"]

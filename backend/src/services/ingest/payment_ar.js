@@ -5,9 +5,9 @@
 //
 // ISOLATED by design: writes ONLY ar_contracts/ar_lines, never the AP chain
 // (contracts/invoices/payment_requests). Unknown amounts stay null.
-import { getDb } from '../../db/index.js';
+import { getDb, withClientTx } from '../../db/index.js';
 import { recordFailure } from './failures.js';
-import { readSheet, toText, toInt, toFloat, toDate } from '../../lib/excel.js';
+import { readSheet, readWorkbook, toText, toInt, toFloat, toDate } from '../../lib/excel.js';
 import { norm } from '../../lib/classify.js';
 
 const SKIP_SHEETS = /^(foxz|sheet\d*)$/i;
@@ -136,8 +136,7 @@ function parseDetail(rows) {
 }
 
 export async function parse(filePath, projectId) {
-  const XLSX = (await import('xlsx')).default;
-  const wb = XLSX.readFile(filePath, { cellDates: true });
+  const wb = readWorkbook(filePath);
   const sheets = [];
   for (const sheetName of wb.SheetNames) {
     if (SKIP_SHEETS.test(sheetName.trim())) continue;
@@ -196,7 +195,11 @@ export async function commit(parsed, projectId, zoneCode, uploadId = null) {
   const db = getDb();
   const report = { doc_type: 'payment_ar', ok: 0, errors: 0, items: [] };
   for (const sheet of parsed.sheets || []) {
+    // One transaction per sheet. The ar_lines path is clear-then-insert; on a
+    // separate connection a mid-way failure exposed an empty ar_lines window to
+    // readers and left the workbook half-loaded.
     try {
+      await withClientTx(async (db) => {
       if (sheet.kind === 'summary') {
         for (const [idx, row] of sheet.rows.entries()) {
           try {
@@ -231,6 +234,7 @@ export async function commit(parsed, projectId, zoneCode, uploadId = null) {
           }
         }
       }
+      });
     } catch (e) {
       recordFailure(report, { sheet: sheet.sheet, row: null, ref: null, message: e.message });
     }

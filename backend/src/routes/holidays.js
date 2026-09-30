@@ -8,6 +8,7 @@ import { requireAuth, requireRole } from '../lib/auth.js';
 import { permissionMiddleware } from '../lib/permission-middleware.js';
 import { getDb } from '../db/index.js';
 import { withAudit } from '../lib/with-audit.js';
+import { errorBody } from '../lib/error-body.js';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -30,7 +31,7 @@ router.post('/holidays', requireRole('admin', 'ceo', 'pm'), async (req, res) => 
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'name required' });
   try {
     const row = await withAudit(req, {
-      action: 'CREATE', resourceType: 'site_holiday', resourceId: 0,
+      action: 'CREATE', resourceType: 'site_holiday',
       after: { holiday_date, name },
       note: `Ngày nghỉ ${holiday_date} (${name})`,
     }, async (client) => {
@@ -44,7 +45,7 @@ router.post('/holidays', requireRole('admin', 'ceo', 'pm'), async (req, res) => 
     if (!row) return res.status(409).json({ error: 'holiday already exists' });
     res.status(201).json(row);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 
@@ -66,7 +67,7 @@ router.delete('/holidays/:id', requireRole('admin', 'ceo', 'pm'), async (req, re
     });
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 

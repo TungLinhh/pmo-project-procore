@@ -1,5 +1,6 @@
 // P1-09: site role routes to /field regardless of role casing.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p1-09-login-routing.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
@@ -17,7 +18,7 @@ const decide = (role, isFieldPath = false) =>
   (isFieldPath || String(role || '').toLowerCase() === 'site') ? '/field' : '/hq';
 
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3209' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 try {
   for (const email of ['site@hbg.com', 'admin@hbg.com', 'pmo@hbg.com']) {
     const r = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: 'admin123' }) });

@@ -11,6 +11,7 @@
 // Kênh nào không config → log warning + bỏ qua (graceful degradation).
 
 import { getDb } from '../db/index.js';
+import { dec } from '../lib/crypto.js';
 
 const EMAIL_CONFIG = {
   host: process.env.SMTP_HOST,
@@ -93,6 +94,20 @@ export async function notify(options) {
   const db = getDb();
   const results = {};
 
+  // Người nhận phải cùng tenant. Comment ngay trên nói "no silent cross-tenant
+  // writes" nhưng trước đây **không có** bước nào kiểm tra điều đó: `userId` đi
+  // thẳng từ `notify_to_user_ids` / `user_ids` trong body của client, và `tenantId`
+  // lấy từ `req.user.tenant_id` — nên gửi được thông báo tenant A cho user tenant B.
+  //
+  // Sửa ở **đây** chứ không ở từng route vì đây là nơi duy nhất mọi lời gọi đều đi
+  // qua. Trong request thì RLS đã chặn sẵn (GUC được set), nên kiểm này chủ yếu bảo
+  // vệ các caller chạy nền — nơi `app.current_tenant` không có và RLS mở hatch
+  // `app_tenant_unset()`, đúng chỗ `routes/jobs.js` từng rò 25 dòng.
+  const target = await db.prepare('SELECT id, tenant_id FROM users WHERE id = ?').getAsync(userId);
+  if (!target || Number(target.tenant_id) !== Number(tenantId)) {
+    return { rejected: `user ${userId} không thuộc tenant ${tenantId}` };
+  }
+
   // 1. in_app (always)
   if (channels.includes('in_app')) {
     try {
@@ -106,7 +121,7 @@ export async function notify(options) {
 
   // 2. email
   if (channels.includes('email')) {
-    const u = await db.prepare('SELECT email, notify_email FROM users WHERE id = ?').getAsync(userId);
+    const u = await db.prepare('SELECT email, notify_email FROM users WHERE id = ? AND tenant_id = ?').getAsync(userId, tenantId);
     if (u?.notify_email && u.email) {
       results.email = await sendEmail(u.email, title, body);
     } else {
@@ -116,9 +131,10 @@ export async function notify(options) {
 
   // 3. zalo
   if (channels.includes('zalo')) {
-    const u = await db.prepare('SELECT zalo_user_id, notify_zalo FROM users WHERE id = ?').getAsync(userId);
+    const u = await db.prepare('SELECT zalo_user_id, notify_zalo FROM users WHERE id = ? AND tenant_id = ?').getAsync(userId, tenantId);
     if (u?.notify_zalo && u.zalo_user_id) {
-      results.zalo = await sendZalo(u.zalo_user_id, body);
+      // zalo_user_id ma hoa cot (task 10) — giai ma truoc khi goi OA API.
+      results.zalo = await sendZalo(dec(u.zalo_user_id), body);
     } else {
       results.zalo = { ok: false, reason: 'user zalo disabled or missing' };
     }
@@ -140,12 +156,19 @@ export async function notify(options) {
   return results;
 }
 
-// Broadcast to multiple users (filters theo role/zone)
+// Broadcast to multiple users (filters theo role/zone).
+// `results` giữ nguyên một phần tử cho **mỗi** id, kể cả id bị từ chối — nên đếm
+// `.length` vẫn bằng số id gửi vào. Dùng `delivered` để biết thực sự có bao nhiêu
+// người nhận, và `rejected` để báo cáo id sai tenant thay vì im lặng bỏ.
 export async function notifyMany(userIds, options) {
   const results = [];
   for (const uid of userIds) {
     const r = await notify({ ...options, userId: uid });
     results.push({ userId: uid, ...r });
   }
-  return results;
+  return {
+    results,
+    delivered: results.filter((r) => r.in_app?.ok).length,
+    rejected: results.filter((r) => r.rejected).map((r) => ({ userId: r.userId, reason: r.rejected })),
+  };
 }

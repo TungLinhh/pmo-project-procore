@@ -14,7 +14,7 @@ const exec = (sql) => execSync(`bash backend/scripts/pg-ctl.sh psql -c "${sql.re
 
 const PATTERNS = ['DRILL-%', 'WIZ-AUTH-%', 'P0-06-%', 'P0-07-%', 'TR-TEST-%', 'TR-MS-%', 'TR-CT-%', 'TR-INV-%', 'TR-PR-%',
   'CH-TEST-%', 'CH-DEPT-%', 'SEQ-%', 'TX-OK', 'REJ-TEST-%', 'REJ-MS-%', 'P1-CLOSE-%', 'FRESH-%', 'PAY-SLA-%',
-  'CNT-TEST-%', 'INV-TEST-%', 'PR-TEST-%', 'PR-NEG-%', 'SUB-TEST-%', 'TEST-L5-%', 'TEST-ESC-%', 'p0-05-%'];
+  'CNT-TEST-%', 'INV-TEST-%', 'PR-TEST-%', 'PR-NEG-%', 'SUB-TEST-%', 'TEST-L5-%', 'TEST-ESC-%', 'p0-05-%', 'DL-%']; // DL-*: deadline-replan scratch
 const like = (col) => PATTERNS.map((p) => `${col} LIKE '${p}'`).join(' OR ');
 
 const junkProjects = sh(`SELECT COALESCE(string_agg(id::text, ','), '') FROM projects WHERE id NOT IN (1,2,3) AND (${like('code')});`);
@@ -26,10 +26,10 @@ if (junkProjects) {
   exec(`DELETE FROM daily_materials WHERE daily_report_id IN (SELECT id FROM daily_reports WHERE project_id IN (${ids}));`);
   exec(`DELETE FROM daily_acceptance WHERE daily_report_id IN (SELECT id FROM daily_reports WHERE project_id IN (${ids}));`);
   exec(`DELETE FROM daily_reports WHERE project_id IN (${ids});`);
+  exec(`DELETE FROM payments WHERE project_id IN (${ids});`);
   exec(`DELETE FROM payment_requests WHERE invoice_id IN (SELECT i.id FROM invoices i JOIN contracts c ON c.id = i.contract_id WHERE c.project_id IN (${ids}));`);
   exec(`DELETE FROM invoices WHERE contract_id IN (SELECT id FROM contracts WHERE project_id IN (${ids}));`);
   exec(`DELETE FROM contracts WHERE project_id IN (${ids});`);
-  exec(`DELETE FROM payments WHERE project_id IN (${ids});`);
   exec(`DELETE FROM ar_lines WHERE project_id IN (${ids});`);
   exec(`DELETE FROM ar_contracts WHERE project_id IN (${ids});`);
   exec(`DELETE FROM construction_schedule_items WHERE project_id IN (${ids});`);

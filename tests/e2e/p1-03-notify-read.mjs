@@ -1,14 +1,21 @@
 // P1-03: notification read-state contract — read_at + ?unread_only=1 end to end.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p1-03-notify-read.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { cleanupOnExit } from './lib-cleanup.mjs';
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3203';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3203' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
+
+// Dọn dữ liệu thật — xem `lib-cleanup.mjs`.
+cleanupOnExit(['p1-03-%'], { label: 'p1-03-notify-read' });
+
+
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) });
   const { token, user } = await login.json();

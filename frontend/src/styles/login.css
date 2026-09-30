@@ -1,4 +1,28 @@
 /* Login page - clean, centered, no gradient */
+
+/* ====== Dark mode ======
+   --c-primary hoá thành xanh sáng (#7cb9ff) trong dark mode, nên panel thương
+   hiệu nền sáng + chữ trắng chỉ còn 1.45–2.05:1. Đảo panel về nền tối và
+   dùng chữ sáng; nút đăng nhập dùng chữ tối trên nền accent sáng. */
+.theme-dark .login-side {
+  position: relative;
+  background: #101a2e;
+  color: var(--c-text);
+  border-right: 1px solid var(--c-border);
+}
+.theme-dark .login-side .brand-sub,
+.theme-dark .login-side .caption,
+.theme-dark .login-side .legal { color: var(--c-text-2); }
+.theme-dark .login-side::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(120% 90% at 15% 0%, rgba(124, 185, 255, 0.16), transparent 60%);
+}
+.theme-dark .login-side > * { position: relative; z-index: 1; }
+.theme-dark .login-submit { color: var(--c-text-i); }
+
 .login-page {
   min-height: 100vh;
   display: grid;

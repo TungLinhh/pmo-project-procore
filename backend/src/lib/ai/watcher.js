@@ -4,6 +4,7 @@
 // submittal per 24h. Monthly cap enforced inside callChat.
 import { getDb } from '../../db/index.js';
 import { callChat } from './providers.js';
+import { getEntitlements, hasFeature } from '../entitlements.js';
 
 let _lastRun = null;
 let _lastResult = null;
@@ -22,25 +23,40 @@ export async function runAiSlaWatch({ maxDrafts = 20 } = {}) {
   ).allAsync();
   const drafted = [];
   for (const { tenant_id } of tenants) {
+    const entitlements = await getEntitlements(tenant_id);
+    if (!hasFeature(entitlements, 'ai-assistant')) continue;
+    // Hạn mức phải **mỗi tenant**, không phải toàn cục.
+    //
+    // Trước đây `drafted` khai báo ngoài vòng lặp tenant và điều kiện dừng là
+    // `drafted.length >= maxDrafts` ⇒ tenant đứng đầu danh sách tiêu hết ngân sách
+    // (`LIMIT maxDrafts` trong SQL là *mỗi tenant*), rồi mọi tenant sau đều `break`
+    // ngay ở dòng đầu vòng lặp con và **không bao giờ** nhận draft nào. Thứ tự
+    // `SELECT DISTINCT tenant_id` không bảo đảm gì, nên tenant nào bị bỏ là ngẫu nhiên
+    // theo lần chạy. Nay đếm riêng từng tenant.
+    let draftedForTenant = 0;
     const overdue = await db.prepare(
       `SELECT ms.id, ms.submittal_code, ms.sla_deadline, ms.supervisor_deadline,
+              GREATEST(
+                CURRENT_DATE - LEAST(
+                  COALESCE(ms.sla_deadline, ms.supervisor_deadline),
+                  COALESCE(ms.supervisor_deadline, ms.sla_deadline)
+                ), 0
+              ) AS days_late,
               p.id AS project_id, p.code AS project_code, p.pm_user_id
        FROM material_submittals ms JOIN projects p ON p.id = ms.project_id
        WHERE p.tenant_id = ? AND ms.status = 'SUBMITTED'
          AND (ms.sla_deadline < CURRENT_DATE OR ms.supervisor_deadline < CURRENT_DATE)
          AND NOT EXISTS (
            SELECT 1 FROM ai_drafts d
-           WHERE d.kind = 'sla_nudge' AND d.status = 'pending'
+           WHERE d.kind = 'sla_nudge'
              AND d.payload->>'submittal_id' = ms.id::text
              AND d.created_at > now() - interval '24 hours')
        ORDER BY LEAST(ms.sla_deadline, ms.supervisor_deadline) ASC
        LIMIT ?`
     ).allAsync(tenant_id, maxDrafts);
     for (const sub of overdue) {
-      if (drafted.length >= maxDrafts) break;
-      const daysLate = Math.max(
-        Math.floor((Date.now() - new Date(sub.sla_deadline || sub.supervisor_deadline)) / 864e5), 0
-      );
+      if (draftedForTenant >= maxDrafts) break;
+      const daysLate = Math.max(Number(sub.days_late) || 0, 0);
       try {
         const r = await callChat(tenant_id, {
           system: DRAFT_SYSTEM,
@@ -70,7 +86,11 @@ export async function runAiSlaWatch({ maxDrafts = 20 } = {}) {
             kind: 'sla_nudge', submittal_id: sub.id, project_id: sub.project_id,
           });
         } catch {}
-        drafted.push({ submittal_id: sub.id, submittal_code: sub.submittal_code, days_late: daysLate });
+        draftedForTenant += 1;
+        drafted.push({
+          tenant_id: Number(tenant_id),
+          submittal_id: sub.id, submittal_code: sub.submittal_code, days_late: daysLate,
+        });
       } catch (e) {
         console.error(`[ai-watch] submittal ${sub.id}:`, e.message);
       }

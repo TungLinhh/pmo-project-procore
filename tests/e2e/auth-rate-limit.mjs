@@ -2,13 +2,14 @@
 // Spawns its own server (isolated in-memory counters). LOGIN_FAILED rows land
 // in audit_log (harmless, same as real brute-force traces).
 // Run: node tests/e2e/auth-rate-limit.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const BASE = 'http://localhost:3113';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, PORT: '3113' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 
 try {
   const attempt = (password) => fetch(BASE + '/api/auth/login', {

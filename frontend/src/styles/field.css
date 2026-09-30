@@ -84,7 +84,7 @@
   border: 1px solid var(--c-border-strong);
 }
 .field-button.secondary:active { background: var(--c-surface-2); }
-.field-button.danger { background: var(--c-behind); border-color: var(--c-behind); }
+.field-button.danger { background: var(--c-solid-alert); border-color: var(--c-solid-alert); color: var(--c-solid-alert-fg); }
 
 /* Sync status bar (mục 33) */
 .sync-bar {

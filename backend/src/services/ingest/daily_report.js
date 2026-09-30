@@ -1,9 +1,9 @@
 // Ingestion: Daily Report (LAWRENCE STING C20 style)
 // File: Báo cáo công việc C20 ngày 23.5.2021.xlsx — each sheet = 1 day
 // PG-only. Mô hình A wizard.
-import { getDb } from '../../db/index.js';
+import { getDb, withClientTx } from '../../db/index.js';
 import { fieldFromDbError } from './failures.js';
-import { readSheet, toDate, toInt, toFloat, toText } from '../../lib/excel.js';
+import { readSheet, readWorkbook, toDate, toInt, toFloat, toText } from '../../lib/excel.js';
 
 function parseSheetDate(sheetName) {
   const m = sheetName.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
@@ -86,8 +86,7 @@ function parseAcceptance(rows) {
 }
 
 export async function parse(filePath, projectId) {
-  const XLSX = (await import('xlsx')).default;
-  const wb = XLSX.readFile(filePath, { cellDates: true });
+  const wb = readWorkbook(filePath);
   const sheets = [];
   for (const sheetName of wb.SheetNames) {
     const reportDate = parseSheetDate(sheetName);
@@ -111,15 +110,46 @@ export async function commit(parsed, projectId) {
   const report = { doc_type: 'daily_report', sheets: [], total: { ok: 0, errors: 0 } };
 
   for (const sheet of parsed.sheets) {
+    // One transaction per sheet. Previously the parent upsert, the destructive
+    // DELETE of six child tables and every insert each ran on their own pooled
+    // connection, so a mid-way failure left the report row with 0 or partial
+    // children and the previous day's data already gone.
     try {
+      await withClientTx(async (db) => {
+      // `prepared_by` là người **lập** báo cáo — ứng dụng gán tay
+      // (`routes/daily.js:77`), và nó đi ra báo cáo Excel (`routes/export.js:27`).
+      // Sheet chỉ là bản nháp, nên không được ghi đè giá trị đã có. `setCols`
+      // tường minh theo tiền lệ `shop_drawing.js:213`.
       const reportUpsert = await db.upsert('daily_reports',
-        { conflictCols: ['project_id', 'report_date'] },
+        { conflictCols: ['project_id', 'report_date'], setCols: ['source_sheet_name'] },
         { project_id: projectId, report_date: sheet.report_date, prepared_by: sheet.prepared_by, source_sheet_name: sheet.sheet }
       );
       const dailyReportId = reportUpsert.lastInsertRowid;
 
-      // Idempotency: clear children
-      for (const tbl of ['daily_work_items', 'daily_materials', 'daily_manpower', 'daily_acceptance', 'daily_safety', 'daily_recommendations']) {
+      // Idempotency: xoá con — NHƯNG chỉ bảng mà sheet thực sự cung cấp dòng.
+      //
+      // Trước đây xoá cả sáu bảng vô điều kiện. Hai hậu quả đo được:
+      //
+      //  • `daily_safety` và `daily_recommendations` **không hề** được nạp từ sheet
+      //    (không có `INSERT` nào trong repo) nhưng vẫn bị xoá ⇒ mỗi lần nạp lại
+      //    file xoá sạch những gì người dùng nhập trong ứng dụng, và **không có
+      //    gì để khôi phục** vì sheet không bao giờ chứa dữ liệu đó.
+      //  • `daily_manpower` được cả sheet lẫn ứng dụng ghi vào
+      //    (`routes/daily.js:111` là đường công nhân nhập tay) nên xoá vô điều
+      //    kiện là xoá luôn công sức hiện trường.
+      //
+      // Nguyên tắc giống `material_supply.js`: **sheet không nói gì thì đừng xoá
+      // thứ ứng dụng đang giữ**. Bảng không có dòng trong sheet thì giữ nguyên
+      // dữ liệu cũ.
+      const fromSheet = [
+        ['daily_work_items', sheet.work_items?.length],
+        ['daily_materials', sheet.materials?.length],
+        ['daily_manpower', sheet.manpower?.length],
+        ['daily_acceptance', sheet.acceptance?.length],
+      ].filter(([, n]) => Number(n) > 0).map(([tbl]) => tbl);
+      // `daily_safety` / `daily_recommendations` cố ý KHÔNG nằm trong danh sách:
+      // sheet không bao giờ cung cấp chúng nên không được phép xoá.
+      for (const tbl of fromSheet) {
         await db.prepare(`DELETE FROM ${tbl} WHERE daily_report_id = ?`).runAsync(dailyReportId);
       }
 
@@ -141,10 +171,13 @@ export async function commit(parsed, projectId) {
       for (const [wiIdx, item] of sheet.work_items.entries()) {
         try {
           const notes = [item.blocker_notes, item.manpower_rate != null ? `rate ${item.manpower_rate}` : null].filter(Boolean).join(' | ') || null;
-          const r = await db.prepare(`
+          // Savepoint: một dòng hỏng **giết cả transaction** nếu không có, khiến mọi
+          // dòng hợp lệ phía sau cũng mất và thông điệp chỉ ra "current transaction is
+          // aborted" chứ không chỉ dòng lỗi. Đo 2026-09-28.
+          const r = await db.savepoint(() => db.prepare(`
             INSERT INTO daily_work_items (daily_report_id, parent_id, ordinal, name_vi, system_vi, progress_pct, plan_start_date, plan_end_date, lag_days, notes)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).runAsync(dailyReportId, null, item.ordinal, item.name_vi, item.system_type, item.progress_pct, item.start_date, item.finish_date, item.lost_days, notes);
+          `).runAsync(dailyReportId, null, item.ordinal, item.name_vi, item.system_type, item.progress_pct, item.start_date, item.finish_date, item.lost_days, notes));
           insertedIds.push(Number(r.lastInsertRowid));
           ok++; nWork++;
         } catch (e) { fail(item.rowIndex ?? wiIdx + 1, item.name_vi || null, e.message, { ordinal: item.ordinal }); }
@@ -160,29 +193,29 @@ export async function commit(parsed, projectId) {
       for (const [mIdx, m] of sheet.materials.entries()) {
         try {
           const notes = [`STT ${m.ordinal ?? '?'}`, [m.start_date, m.finish_date].filter(Boolean).join('→') || null, m.lost_days != null ? `chậm ${m.lost_days} ngày` : null, m.progress_pct != null ? `${m.progress_pct * 100}%` : null].filter(Boolean).join(' · ') || null;
-          await db.prepare(`
+          await db.savepoint(() => db.prepare(`
             INSERT INTO daily_materials (daily_report_id, name_vi, notes)
             VALUES (?, ?, ?)
-          `).runAsync(dailyReportId, m.name_vi, notes);
+          `).runAsync(dailyReportId, m.name_vi, notes));
           ok++; nMat++;
         } catch (e) { fail(m.rowIndex ?? mIdx + 1, m.name_vi || null, e.message, { ordinal: m.ordinal }); }
       }
       for (const [mpIdx, m] of sheet.manpower.entries()) {
         try {
           const notes = [m.cumulative_qty != null ? `lũy kế ${m.cumulative_qty}` : null, m.consumed_qty != null ? `đã dùng ${m.consumed_qty}` : null].filter(Boolean).join(', ') || null;
-          await db.prepare(`
+          await db.savepoint(() => db.prepare(`
             INSERT INTO daily_manpower (daily_report_id, role_name_vi, headcount, notes)
             VALUES (?, ?, ?, ?)
-          `).runAsync(dailyReportId, m.role_name, m.today_qty, notes);
+          `).runAsync(dailyReportId, m.role_name, m.today_qty, notes));
           ok++; nMp++;
         } catch (e) { fail(m.rowIndex ?? mpIdx + 1, m.role_name || null, e.message); }
       }
       for (const [aIdx, a] of sheet.acceptance.entries()) {
         try {
-          await db.prepare(`
+          await db.savepoint(() => db.prepare(`
             INSERT INTO daily_acceptance (daily_report_id, ordinal, name_vi, notes)
             VALUES (?, ?, ?, ?)
-          `).runAsync(dailyReportId, a.ordinal, a.acceptance_type, a.status != null ? `status ${a.status}` : null);
+          `).runAsync(dailyReportId, a.ordinal, a.acceptance_type, a.status != null ? `status ${a.status}` : null));
           ok++; nAcc++;
         } catch (e) { fail(a.rowIndex ?? aIdx + 1, a.acceptance_type || null, e.message, { ordinal: a.ordinal }); }
       }
@@ -192,6 +225,7 @@ export async function commit(parsed, projectId) {
       report.sheets.push({ sheet: sheet.sheet, status: errors ? 'PARTIAL' : 'OK', daily_report_id: dailyReportId, ok, errors, failures });
       report.total.ok += ok;
       report.total.errors += errors;
+      });
     } catch (e) {
       report.sheets.push({ sheet: sheet.sheet, status: 'FAILED', error: e.message });
       report.total.errors++;

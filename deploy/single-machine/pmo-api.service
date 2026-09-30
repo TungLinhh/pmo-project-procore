@@ -1,0 +1,44 @@
+# Triển khai MỘT MÁY, KHÔNG Docker — dành cho demo nội bộ tạm thời.
+#
+# Vì sao là systemd **user** unit chứ không phải system unit: máy này không cấp quyền
+# `sudo` không mật khẩu cho tiến trình agent (đo 2026-09-28: `sudo -n true` → fail), nên
+# không tạo được system unit hay mount. User unit chạy được, và vẫn tự khởi động lại khi
+# máy reboot **nếu** đã bật `loginctl enable-linger` (cần một lần, xem README).
+#
+# Vì sao env nằm trong `EnvironmentFile` chứ không phải `backend/.env`:
+# `backend/src/db/index.js:49` cố ý **không** nạp `backend/.env` khi
+# `NODE_ENV=production` ("an image that shipped a baked backend/.env would silently
+# connect to a developer's database"). Nên production phải cấp env tường minh — và
+# `backend/.env` phải giữ nguyên làm cấu hình **dev + test** (126 bài e2e dựa vào nó).
+#
+# Cấu hình, bí mật và đường dẫn: xem README.md cùng thư mục.
+
+[Unit]
+Description=PMO API (Procore-like) — bản demo nội bộ, một máy
+Documentation=file:///home/vutun/pmo_project_procore/deploy/single-machine/README.md
+# `Requires` + `After` với `pmo-db.service`: Postgres của bản demo nằm trong data dir
+# của repo, nên phải do chính user unit này bật — không có `postgresql.service` hệ thống
+# nào biết tới nó. Trước đây API tự khởi động mà Postgres thì không, ra trạng thái
+# `is-active` = active còn `/api/ready` = 503 (đo 2026-09-30, sau một đêm không ai vào
+# được hệ thống). `Requires` nghĩa là DB lỗi thì API không bật: tốt hơn hẳn so với
+# "dịch vụ báo sống nhưng mọi truy vấn hỏng" — đúng cái đã lừa người vận hành trước đó.
+Requires=pmo-db.service
+After=network-online.target pmo-db.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/vutun/pmo_project_procore/backend
+EnvironmentFile=/home/vutun/pmo_project_procore/deploy/single-machine/pmo.env
+ExecStart=/usr/bin/node src/index.js
+# `NODE_ENV=production` + `PRODUCTION_ENFORCE_READINESS=1` ⇒ **từ chối boot** nếu còn mục
+# readiness mức `fail`. Đó là ý nghĩa của cờ này: nó biến checklist thành rào chắn, đổi
+# lại là bản triển khai "đỏ nhưng vẫn chạy" — đúng thứ đã xảy ra ở môi trường container.
+Restart=always
+RestartSec=5
+# Không dùng `npm start` (single-port) ở đây: bản này chạy API riêng, Vite phục vụ
+# `frontend/dist` qua reverse proxy hoặc truy cập trực tiếp :5173 khi phát triển.
+StandardOutput=append:/home/vutun/pmo_project_procore/deploy/single-machine/logs/api.log
+StandardError=append:/home/vutun/pmo_project_procore/deploy/single-machine/logs/api.log
+
+[Install]
+WantedBy=default.target

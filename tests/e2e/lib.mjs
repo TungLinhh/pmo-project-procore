@@ -41,3 +41,41 @@ export const J = (token, body) => ({ headers: auth(token), body: JSON.stringify(
 // Homebrew binary path + dev password). Returns first line of -t -A output
 // (strips the 'INSERT 0 1'-style tags psql prints for RETURNING queries).
 export const psql = (sql) => psqlQuery(sql).split('\n')[0];
+
+/**
+ * Chờ server con thực sự **lên**, thay cho `sleep(3500)` cố định.
+ *
+ * Vì sao cần: **52 bài** dùng `await new Promise(r => setTimeout(r, 3500))` ngay sau khi
+ * spawn `backend/src/index.js`. Ba giây rưỡi là đủ khi máy rảnh, nhưng khi cả bộ 142
+ * bài chạy tuần tự thì server mới có thể cần hơn — và bài đỏ với
+ * `TypeError: fetch failed / ConnectTimeoutError` trông **giống hỏng sản phẩm** nhưng
+ * hoàn toàn là bẫp thời gian. Đo 2026-09-28: `nested-departments.mjs` đỏ đúng kiểu đó
+ * (spawn xong 15s sau vẫn không kết nối được ở cổng 3120), trong khi chạy riêng thì xanh.
+ *
+ * Dò `/api/health` chứ **không** dò `/api/ready`: `health` là liveness-only và không
+ * chạm DB, nên không phụ thuộc Postgres hay seed data — đúng thứ ta cần để biết
+ * "tiến trình đã lắng nghe".
+ *
+ * @param {string} base ví dụ `http://localhost:3120`
+ * @param {number} [timeoutMs] trần chờ; hết giờ thì **ném** kèm số giây đã chờ
+ * @param {number} [stepMs] bước nhảy giữa hai lần dò
+ */
+export async function waitForServer(base, timeoutMs = 45_000, stepMs = 250) {
+  const deadline = Date.now() + timeoutMs;
+  let lastErr = null;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(4_000) });
+      if (res.ok) return true;
+      lastErr = new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      lastErr = e;
+    }
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+  throw new Error(
+    `server ${base} không lên trong ${Math.round(timeoutMs / 1000)}s (lỗi cuối: ${lastErr?.message || 'không rõ'}).\n` +
+    `  Nếu là "ConnectTimeoutError": cổng đã bị chiếm bởi server cũ (bài trước để sót) — ` +
+    `xem sweepStrayServers() trong scripts/run-all-e2e.mjs.`,
+  );
+}

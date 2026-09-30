@@ -7,7 +7,7 @@
 // Sheet selection skips known-empty placeholders (foxz/SheetN), not by name.
 import { getDb } from '../../db/index.js';
 import { recordFailure } from './failures.js';
-import { readSheet, toText, toInt, toFloat, toDate } from '../../lib/excel.js';
+import { readSheet, readWorkbook, toText, toInt, toFloat, toDate } from '../../lib/excel.js';
 import { findOrCreateZone } from './index.js';
 import { norm } from '../../lib/classify.js';
 
@@ -130,8 +130,7 @@ export function locateScheduleHeader(rows, maxScan = 40) {
 }
 
 export async function parse(filePath, projectId, zoneCode) {
-  const XLSX = (await import('xlsx')).default;
-  const wb = XLSX.readFile(filePath, { cellDates: true });
+  const wb = readWorkbook(filePath);
   const { code, name } = resolveZone(zoneCode);
   const sheets = [];
   for (const sheetName of wb.SheetNames) {
@@ -142,10 +141,26 @@ export async function parse(filePath, projectId, zoneCode) {
     const map = locateScheduleHeader(rows);
     if (!map) continue;
     const sheetRows = [];
+    // Phase context: STT con kieu "1,2,3..." lap lai duoi moi de-muc La Ma
+    // (I, II, ...) — giu de-muc cha gan nhat de key (roman,arabic,sub,ordinal)
+    // phan biet duoc I.1 vs II.1 (khong mat 70% rows nhu truoc).
+    let phaseCtx = '';
     for (let r = map.dataStart; r < rows.length; r++) {
       const row = rows[r] || [];
       const parsed = parseRow(row, map, r + 1);
-      if (parsed) sheetRows.push({ rowIndex: r + 1, ...parsed });
+      if (!parsed) continue;
+      if (parsed.level_roman) {
+        phaseCtx = parsed.level_roman;
+      } else if (parsed.level_arabic != null || parsed.sublevel != null) {
+        if (!parsed.level_roman && phaseCtx) parsed.level_roman = phaseCtx;
+      } else {
+        phaseCtx = '';
+      }
+      const wbsParts = [parsed.level_roman, parsed.level_arabic, parsed.sublevel]
+        .filter((value) => value != null && value !== '')
+        .map(String);
+      parsed.wbs_code = wbsParts.length ? wbsParts.join('.') : `ROW-${parsed.ordinal ?? r + 1}`;
+      sheetRows.push({ rowIndex: r + 1, ...parsed });
     }
     if (sheetRows.length > 0) sheets.push({ sheet: sheetName, rows: sheetRows });
   }
@@ -162,16 +177,52 @@ export async function commit(parsed, projectId, zoneCode, uploadId = null) {
   for (const sheet of parsed.sheets) {
     for (const [idx, row] of sheet.rows.entries()) {
       try {
+        // Level ve default ''/0/0 (khong NULL) de key upsert 7 cot phan biet
+        // duoc I.1 vs II.1 — NULL lam UNIQUE vo hieu (NULL khac NULL).
+        const lvRoman = row.level_roman || '', lvArabic = row.level_arabic ?? 0, lvSub = row.sublevel ?? 0;
+        // Không đưa `status` vào `setCols`.
+        // `setCols` tường minh (tiền lệ: `shop_drawing.js:213`). `status` **không** nằm
+        // trong danh sách: nó là cột vòng đời do ứng dụng và baseline quản lý, và
+        // `deriveStatus()` chạy lại từ tiến độ trong sheet sẽ lệch với
+        // `schedule_baseline_items.status` đã snapshot — `restoreBaseline` chỉ phục
+        // hồi `plan_*_date`/`plan_duration_days` nên lệch đó không tự lành.
         await db.upsert('construction_schedule_items',
-          { conflictCols: ['project_id', 'zone_id', 'source_sheet', 'ordinal'] },
+          { conflictCols: ['project_id', 'zone_id', 'source_sheet', 'level_roman', 'level_arabic', 'sublevel', 'ordinal'],
+            setCols: ['zone_id', 'source_sheet', 'upload_id', 'name_vi', 'name_en', 'progress_pct', 'source_status',
+                      'plan_start_date', 'actual_start_date', 'plan_end_date', 'actual_end_date', 'plan_duration_days'] },
           {
             project_id: projectId, zone_id: zoneId, source_sheet: sheet.sheet, upload_id: uploadId,
-            level_roman: row.level_roman, level_arabic: row.level_arabic, sublevel: row.sublevel, ordinal: row.ordinal,
+            level_roman: lvRoman, level_arabic: lvArabic, sublevel: lvSub, ordinal: row.ordinal,
             name_vi: row.name_vi, name_en: row.name_en, progress_pct: row.progress_pct, status: deriveStatus(row.progress_pct, row.actual_end_date), source_status: row.source_status || null,
             plan_start_date: row.plan_start_date, actual_start_date: row.actual_start_date,
             plan_end_date: row.plan_end_date, actual_end_date: row.actual_end_date, plan_duration_days: row.plan_duration_days,
           }
         );
+        const scheduleItem = await db.prepare(
+          `SELECT id FROM construction_schedule_items
+           WHERE project_id = ? AND zone_id = ? AND source_sheet = ?
+             AND level_roman = ? AND level_arabic = ? AND sublevel = ? AND ordinal = ?`,
+        ).getAsync(projectId, zoneId, sheet.sheet, lvRoman, lvArabic, lvSub, row.ordinal);
+        if (scheduleItem?.id) {
+          const workCode = `${row.wbs_code || `ROW-${row.ordinal ?? idx + 1}`}-${scheduleItem.id}`;
+          const workItem = await db.prepare(
+            `INSERT INTO work_items
+               (project_id, zone_id, code, name_vi, name_en, item_type,
+                planned_start_date, planned_end_date, plan_duration_days, progress_pct, source_schedule_item_id)
+             VALUES (?, ?, ?, ?, ?, 'TASK', ?, ?, ?, ?, ?)
+             ON CONFLICT (project_id, code) DO UPDATE SET
+               name_vi = EXCLUDED.name_vi, name_en = EXCLUDED.name_en,
+               planned_start_date = EXCLUDED.planned_start_date, planned_end_date = EXCLUDED.planned_end_date,
+               plan_duration_days = EXCLUDED.plan_duration_days, progress_pct = EXCLUDED.progress_pct,
+               source_schedule_item_id = EXCLUDED.source_schedule_item_id, updated_at = now()
+             RETURNING id`,
+          ).getAsync(projectId, zoneId, workCode, row.name_vi, row.name_en, row.plan_start_date,
+            row.plan_end_date, row.plan_duration_days, row.progress_pct, scheduleItem.id);
+          if (workItem?.id) {
+            await db.prepare('UPDATE construction_schedule_items SET work_item_id = ? WHERE id = ?')
+              .runAsync(workItem.id, scheduleItem.id);
+          }
+        }
         report.ok++;
       } catch (e) {
         recordFailure(report, { sheet: sheet.sheet, row: row.rowIndex ?? idx + 1, ref: row.name_vi, message: e.message, keep: { name: row.name_vi } });

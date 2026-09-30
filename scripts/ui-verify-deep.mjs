@@ -3,7 +3,7 @@ import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const BASE = 'http://localhost:3000';
+const BASE = process.env.BASE_URL || 'http://localhost:3000';
 const SHOTS = path.resolve('docs/bug_screenshots');
 fs.mkdirSync(SHOTS, { recursive: true });
 

@@ -176,6 +176,7 @@ export function computeCpm(items, links) {  if (!items.length) return { order: [
 export function compressSchedule(items, links, targetDays, policy = {}) {
   const minFloor = Math.max(0, policy.min_days_floor ?? 1);
   const minPct = Math.min(1, Math.max(0, policy.min_pct ?? 0.5));
+  const candidateIds = policy.candidate_ids == null ? null : new Set((policy.candidate_ids || []).map(Number));
   const orig = new Map(items.map((i) => [i.id, resolveDurationDays(i)]));
   const locked = new Set(items.filter((i) => i.locked).map((i) => i.id));
   const floor = new Map(items.map((i) => {
@@ -207,7 +208,7 @@ export function compressSchedule(items, links, targetDays, policy = {}) {
         bottleneck: [], rounds,
       };
     }
-    const candidates = cpm.critical.filter((id) => !locked.has(id) && durs.get(id) > floor.get(id));
+    const candidates = cpm.critical.filter((id) => !locked.has(id) && (!candidateIds || candidateIds.has(id)) && durs.get(id) > floor.get(id));
     if (!candidates.length || ++rounds > maxRounds) {
       const stuck = computeCpm(withDurs(durs), links);
       return {

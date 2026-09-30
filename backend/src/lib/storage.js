@@ -215,3 +215,9 @@ export function getFilePath(key) {
 export async function fileExists(key) {
   return storage.exists(key);
 }
+// Xoá file đã lưu. Cần cho mọi đường "ghi ra ngoài transaction rồi ghi dòng": nếu
+// phần ghi dòng hỏng, file phải bị dọn — nếu không nó thành rác vĩnh viễn và
+// `scripts/storage-gc.mjs` sẽ báo mãi (xem `routes/daily.js` phần upload ảnh).
+export async function removeFile(key) {
+  return storage.remove(key);
+}

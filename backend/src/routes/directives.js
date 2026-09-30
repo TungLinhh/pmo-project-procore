@@ -14,12 +14,15 @@ router.use(permissionMiddleware);
 
 router.get('/', async (req, res) => {
   const db = getDb();
-  const { project_id, limit = 50 } = req.query;
-  const where = ['1=1'];
-  const params = [];
-  let i = 1;
-  if (project_id) { where.push(`project_id = $${i++}`); params.push(project_id); }
-  const lim = Math.min(parseInt(limit) || 50, 200);
+  const { project_id, issue_id, limit = 50 } = req.query;
+  if (!project_id) return res.status(400).json({ error: 'project_id required' });
+  if (!(await checkProjectAccess(req.user, Number(project_id)))) return res.status(404).json({ error: 'Project not found' });
+  const where = ['project_id = $1'];
+  const params = [project_id];
+  let i = 2;
+  if (issue_id) { where.push(`issue_id = $${i++}`); params.push(issue_id); }
+  const parsedLimit = Number.parseInt(limit, 10);
+  const lim = Math.min(Math.max(Number.isFinite(parsedLimit) ? parsedLimit : 50, 1), 200);
   params.push(lim);
   res.json(await db.prepare(
     `SELECT * FROM directives WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT $${i}`
@@ -49,13 +52,16 @@ router.post('/', requireRole('ceo', 'admin', 'pmo'), async (req, res) => {
     : [];
   if (!recipients.length) {
     // role is a custom ENUM (user_role) — lower() needs a text cast.
+    // PHẢI khoá `tenant_id`: không có nó thì chỉ thị của dự án tenant A gửi tới
+    // mọi PM/PMO của **mọi** tenant. Trong request thì RLS chặn sẵn, nhưng câu này
+    // đọc để *chọn người nhận* — chọn nhầm thì danh sách sai trước khi ghi.
     const pmUsers = await db.prepare(
-      `SELECT id FROM users WHERE LOWER(role::text) IN ('pm', 'pmo')`
-    ).allAsync();
+      `SELECT id FROM users WHERE tenant_id = ? AND LOWER(role::text) IN ('pm', 'pmo')`
+    ).allAsync(req.user.tenant_id);
     recipients = pmUsers.map(u => Number(u.id));
   }
   const created = await withAudit(req, {
-    action: 'DIRECTIVE', resourceType: 'directive', resourceId: 0,
+    action: 'DIRECTIVE', resourceType: 'directive',
     context: { project_id },
     after: { project_id, body, issue_id: issue_id || null },
     note: `Directive: ${body.slice(0, 80)}`,
@@ -66,7 +72,10 @@ router.post('/', requireRole('ceo', 'admin', 'pmo'), async (req, res) => {
     );
     return ins.rows[0];
   });
-  // Send notifications (async, don't block response)
+  // Send notifications (async, don't block response).
+  // `notifyMany` tự bỏ id thuộc tenant khác và trả về `rejected`; ghi log để không
+  // có id nào bị loại một cách âm thầm. Trước đây client gửi `notify_to_user_ids`
+  // tuỳ ý và mọi id đều được chấp nhận.
   if (recipients.length) {
     notifyMany(recipients, {
       tenantId: req.user.tenant_id,
@@ -77,7 +86,13 @@ router.post('/', requireRole('ceo', 'admin', 'pmo'), async (req, res) => {
       resourceType: 'directive',
       resourceId: created?.id ?? null,
       severity: 'info',
-    }).catch(e => console.error('[notify] directive failed:', e.message));
+    })
+      .then((r) => {
+        if (r.rejected.length) {
+          console.warn(`[notify] directive #${created?.id} bỏ qua ${r.rejected.length} người nhận khác tenant: ${r.rejected.map((x) => x.userId).join(', ')}`);
+        }
+      })
+      .catch(e => console.error('[notify] directive failed:', e.message));
   }
   res.json(created);
 });

@@ -1,15 +1,20 @@
 // P0-07: shop transition contract (to_status/comment) + no double-JSON-stringify.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p0-07-shop-contract.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { cleanupProjectsOnExit } from './lib-cleanup.mjs';
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3107';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3107' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 
+
+// Dọn dự án thử nghiệm nếu bài dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupProjectsOnExit(['P0-07-%', 'P0-07-D-%'], { label: 'p0-07-shop-contract' });
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) });
   const { token } = await login.json();
@@ -44,7 +49,10 @@ try {
   const dr = await post(`/api/projects/${tmpProj.j.id}/daily-reports`, { report_date: '2026-09-06', weather_am: 'Nang nhe', weather_pm: 'Mua' });
   ok(dr.s === 200 && dr.j.weather_am === 'Nang nhe', `daily weather_am round-trips (got ${dr.j.weather_am})`);
   const mp = await post(`/api/daily-reports/${dr.j.id}/manpower`, { role_code: 'P0-07', headcount: 5 });
-  ok(mp.s === 200 && mp.j.headcount === 5, `manpower headcount round-trips (got ${mp.j?.headcount})`);
+  // 201 Created, không phải 200: POST tạo dòng mới thì 201 là đúng (REST), và
+  // server đã trả 201 từ lâu. Bài kiểm kỳ vọng 200 nên FAIL một cách vô nghĩa —
+  // nó làm che mất việc còn lỗi thật trong file này.
+  ok(mp.s === 201 && mp.j.headcount === 5, `manpower headcount round-trips (HTTP ${mp.s}, got ${mp.j?.headcount})`);
 
   // frontend source no longer pre-stringifies (static guard)
   const api = readFileSync('frontend/src/api/index.js', 'utf8');

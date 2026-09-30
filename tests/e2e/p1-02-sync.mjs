@@ -2,17 +2,18 @@
 // CLIENT + appliable payload → 200 and the server record changes.
 // CLIENT + no record / unknown type → 422 (never silent). Comparison advisory kept.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p1-02-sync.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn, execSync } from 'node:child_process';
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3202';
-const PSQL = 'PGPASSWORD=pmo_dev_pwd /home/linuxbrew/.linuxbrew/bin/psql -h 127.0.0.1 -p 5433 -U pmo_user -d pmo -t -A';
+const PSQL = `PGPASSWORD=${process.env.PGPASSWORD || 'pmo_dev_pwd'} ${process.env.PSQL_BIN || 'psql'} -h ${process.env.PGHOST || '127.0.0.1'} -p ${process.env.PGPORT || '5433'} -U ${process.env.PGUSER || 'pmo_user'} -d ${process.env.PGDATABASE || 'pmo'} -t -A`;
 const psql = (sql) => execSync(`${PSQL} -c "${sql.replace(/"/g, '\\"')}"`, { encoding: 'utf8' }).trim().split('\n')[0];
 
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3202' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) });
   const { token, user } = await login.json();

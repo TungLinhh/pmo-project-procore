@@ -1,16 +1,21 @@
 // Drill-down lineage: commit stamps upload_id → item API exposes it → single
 // upload lookup + original-file download serve the modal's source link.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/drilldown-lineage.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { cleanupProjectsOnExit } from './lib-cleanup.mjs';
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3218';
 
+
+// Dọn dự án thử nghiệm nếu bài dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupProjectsOnExit(['DRILL-%'], { label: 'drilldown-lineage' });
 // golden schedule workbook (same shape as step1-02)
-const require = createRequire('/home/vutun/pmo_project/backend/package.json');
+const require = createRequire(new URL('../../backend/package.json', import.meta.url));
 const XLSX = require('xlsx');
 const wb = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
@@ -22,7 +27,7 @@ XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
 const buf = Buffer.from(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
 
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3218' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) });
   const { token } = await login.json();

@@ -2,10 +2,11 @@
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/step1-01-shop-golden.mjs
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 import { createRequire } from 'node:module';
-const require = createRequire('/home/vutun/pmo_project/backend/package.json');
+const require = createRequire(new URL('../../backend/package.json', import.meta.url));
 const XLSX = require('xlsx');
 const { parse, commit } = await import('../../backend/src/services/ingest/shop_drawing.js');
 const { getDb, closeDb } = await import('../../backend/src/db/index.js');
+import { cleanupProjectsOnExit } from './lib-cleanup.mjs';
 import { writeFileSync } from 'node:fs';
 
 let failures = 0;
@@ -62,6 +63,16 @@ ok(mcr.sheets[0].rows[0].planned_submit_date === '2024-05-01' && mcr.sheets[0].r
 // commit to throwaway project: statuses via shared table shape
 const db = getDb();
 const proj = await db.prepare(`INSERT INTO projects (tenant_id, code, name_vi) VALUES (1, 'GOLDEN-SHOP-${Date.now()}', 'x') RETURNING id`).getAsync();
+
+// Dọn dự án thử ở `process.on('exit')` — **không** dựng tay bằng `DELETE`.
+//
+// Vì sao: `commit()` của ingestor tạo `work_items`, mà dự án bị `work_items` tham chiếu
+// thì `DELETE FROM projects` hỏng FK `23503` và **cả tiến trình chết** trước khi in tổng
+// kết. Đo 2026-09-28: bản dọn tay thiếu `work_items` ⇒ mỗi lần chạy để lại một dự án
+// rác (chạy `step1-02` 2 lần → 2 dự án `GOLDEN-SCHED-*` còn lại), và dự án rác làm các
+// bài đếm dự án khác đỏ. `cleanupProjectsOnExit` liệt kê 34 bảng con rồi mới xoá dự án.
+cleanupProjectsOnExit(['GOLDEN-SHOP-%'], { label: 'shop-golden' });
+
 const rep = await commit(bte, proj.id, 'BOH');
 ok(rep.ok === 2 && rep.errors === 0, `commit ok=2 errors=0 (got ${rep.ok}/${rep.errors})`);
 const cnt = await db.prepare('SELECT count(*)::int c FROM shop_drawings WHERE project_id = ?').getAsync(proj.id);
@@ -74,9 +85,6 @@ const bad = { zone: { code: 'BOH' }, sheets: [{ sheet: 'S', rows: [{ rowIndex: 9
 const rep2 = await commit(bad, proj.id, 'BOH');
 ok(rep2.errors === 1 && rep2.items[0]?.row === 9 && typeof rep2.items[0]?.message === 'string', 'bad row itemized with row+message');
 
-await db.prepare('DELETE FROM shop_drawings WHERE project_id = ?').runAsync(proj.id);
-await db.prepare('DELETE FROM zones WHERE project_id = ?').runAsync(proj.id);
-await db.prepare('DELETE FROM projects WHERE id = ?').runAsync(proj.id);
 await closeDb();
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');

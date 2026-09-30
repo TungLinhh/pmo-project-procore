@@ -1,10 +1,14 @@
 // UI-006: Issues list - table view với filter + click → IssueDetail
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { projects, issues as issuesApi, getToken, preferDemoProject } from '../api/index.js';
+import { projects, issues as issuesApi, request, preferDemoProject } from '../api/index.js';
 import { ICON } from '../icons.jsx';
 import { toast } from '../components/Toast.jsx';
 import ProjectPicker from '../components/ProjectPicker.jsx';
+import Modal from '../components/Modal.jsx';
+import { t, th, useLang } from '../i18n/index.js';
+import { usePagination } from '../hooks/usePagination.js';
+import TablePagination from '../components/TablePagination.jsx';
 
 const SEV_COLORS = {
   CRITICAL: { bg: 'var(--c-critical-bg)', fg: 'var(--c-critical)' },
@@ -22,14 +26,16 @@ const STATUS_COLORS = {
 };
 
 export default function Issues() {
+  useLang(); // re-render table headers on VI/EN toggle
   const [params] = useSearchParams();
   const initialProject = params.get('project');
-  const [allProjects, setAllProjects] = useState([]);
+  const [, setAllProjects] = useState([]);
   const [selectedProject, setSelectedProject] = useState(initialProject);
   const [filter, setFilter] = useState({ severity: '', status: '', category: '' });
   const [search, setSearch] = useState('');
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [total, setTotal] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [addForm, setAddForm] = useState({ title: '', body: '', category: 'PROGRESS', severity: 'MEDIUM' });
   const [addBusy, setAddBusy] = useState(false);
@@ -39,22 +45,47 @@ export default function Issues() {
     projects.list().then(list => {
       setAllProjects(list);
       if (!selectedProject) setSelectedProject(preferDemoProject(list));
-    });
+    }).catch((e) => toast.error(t('iss.err_projects') + e.message));
   }, []);
 
   useEffect(() => {
     if (!selectedProject) return;
+    let live = true;
     setLoading(true);
     const qs = {};
     if (filter.severity) qs.severity = filter.severity;
     if (filter.status) qs.status = filter.status;
     if (filter.category) qs.category = filter.category;
-    issuesApi.list(selectedProject, qs).then(setItems).finally(() => setLoading(false));
+    issuesApi.listPage(selectedProject, qs)
+      .then(({ rows, total: t }) => {
+        if (!live) return;
+        setItems(rows);
+        setTotal(t);
+      })
+      // Không `.catch` thì lỗi rơi ra ngoài im lặng: danh sách cũ vẫn hiện và
+      // người dùng tưởng dữ liệu chỉ đơn giản là ít đi.
+      .catch((e) => {
+        if (!live) return;
+        setItems([]);
+        setTotal(null);
+        toast.error(t('iss.err_load') + e.message);
+      })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
   }, [selectedProject, filter]);
 
   const filtered = items.filter(i =>
     !search || JSON.stringify(i).toLowerCase().includes(search.toLowerCase())
   );
+
+  // Cắt ở trình duyệt, không phải ở server: ô tìm kiếm và ba ô thống kê phía
+  // trên cũng tính từ `items`. Nếu chỉ tải một trang, thống kê sẽ chỉ phản ánh
+  // trang đó và người dùng tưởng dự án không có sự cố.
+  const page = usePagination(filtered);
+
+  // Server giữ trần danh sách. Khi tổng lớn hơn số dòng đã tải, phải nói ra —
+  // im lặng cắt bớt là nguyên nhân khiến người dùng tin là đã xem hết dữ liệu.
+  const truncated = total != null && total > items.length;
 
   // Stats
   const open = items.filter(i => i.status === 'OPEN').length;
@@ -66,46 +97,46 @@ export default function Issues() {
     <div>
       <div className="page-header">
         <div>
-          <h1>Issues</h1>
+          <h1>{t('nav.issues')}</h1>
           <div className="meta">{items.length} issues · {open} open · {crit} critical</div>
         </div>
         <div className="page-header-right">
-          <button className="btn" onClick={() => setShowAddModal(true)}><ICON.plus size={13} />Tạo issue</button>
+          <button className="btn" onClick={() => setShowAddModal(true)}><ICON.plus size={13} />{t('iss.btn_create')}</button>
         </div>
       </div>
 
       <div className="filter-bar">
-        <label>Project</label>
-        <ProjectPicker value={selectedProject} onChange={setSelectedProject} placeholder="Chọn dự án..." />
-        <label>Severity</label>
+        <label>{t('g.project')}</label>
+        <ProjectPicker value={selectedProject} onChange={setSelectedProject} placeholder={t('iss.pick_project_ph')} />
+        <label>{t('g.severity')}</label>
         <select value={filter.severity} onChange={e => setFilter({ ...filter, severity: e.target.value })}>
-          <option value="">All</option>
-          <option value="CRITICAL">Critical</option>
-          <option value="HIGH">High</option>
-          <option value="MEDIUM">Medium</option>
-          <option value="LOW">Low</option>
+          <option value="">{t('g.all')}</option>
+          <option value="CRITICAL">{t('g.critical')}</option>
+          <option value="HIGH">{t('g.sev_high')}</option>
+          <option value="MEDIUM">{t('g.sev_medium')}</option>
+          <option value="LOW">{t('g.sev_low')}</option>
         </select>
-        <label>Status</label>
+        <label>{t('g.status')}</label>
         <select value={filter.status} onChange={e => setFilter({ ...filter, status: e.target.value })}>
-          <option value="">All</option>
-          <option value="OPEN">Open</option>
-          <option value="ACK">Ack</option>
-          <option value="IN_PROGRESS">In Progress</option>
-          <option value="RESOLVED">Resolved</option>
-          <option value="CLOSED">Closed</option>
+          <option value="">{t('g.all')}</option>
+          <option value="OPEN">{t('g.open')}</option>
+          <option value="ACK">{t('g.ack')}</option>
+          <option value="IN_PROGRESS">{t('iss.in_progress')}</option>
+          <option value="RESOLVED">{t('g.resolved')}</option>
+          <option value="CLOSED">{t('g.closed')}</option>
         </select>
-        <label>Category</label>
+        <label>{t('g.category')}</label>
         <select value={filter.category} onChange={e => setFilter({ ...filter, category: e.target.value })}>
-          <option value="">All</option>
-          <option value="PROGRESS">Progress</option>
-          <option value="QUALITY">Quality</option>
-          <option value="MATERIAL">Material</option>
-          <option value="PAYMENT">Payment</option>
-          <option value="DESIGN">Design</option>
-          <option value="SAFETY">Safety</option>
+          <option value="">{t('g.all')}</option>
+          <option value="PROGRESS">{t('g.progress')}</option>
+          <option value="QUALITY">{t('g.quality')}</option>
+          <option value="MATERIAL">{t('g.material')}</option>
+          <option value="PAYMENT">{t('g.payment')}</option>
+          <option value="DESIGN">{t('g.design')}</option>
+          <option value="SAFETY">{t('g.safety')}</option>
         </select>
         <input
-          placeholder="Search..."
+          placeholder={t('g.ph_search')}
           value={search}
           onChange={e => setSearch(e.target.value)}
           style={{ flex: 1, minWidth: 160 }}
@@ -113,31 +144,31 @@ export default function Issues() {
       </div>
 
       <div className="stat-strip">
-        <div className="stat"><div className="label">Total</div><div className="value">{items.length}</div></div>
-        <div className="stat"><div className="label">Open</div><div className="value" style={{ color: 'var(--c-watch)' }}>{open}</div></div>
-        <div className="stat"><div className="label">In Progress</div><div className="value" style={{ color: 'var(--c-review)' }}>{inProgress}</div></div>
-        <div className="stat"><div className="label">Critical</div><div className="value" style={{ color: 'var(--c-behind)' }}>{crit}</div></div>
-        <div className="stat"><div className="label">Resolved</div><div className="value" style={{ color: 'var(--c-on-track)' }}>{resolved}</div></div>
+        <div className="stat"><div className="label">{t('g.total')}</div><div className="value">{items.length}</div></div>
+        <div className="stat"><div className="label">{t('g.open')}</div><div className="value" style={{ color: 'var(--c-watch)' }}>{open}</div></div>
+        <div className="stat"><div className="label">{t('g.in_progress')}</div><div className="value" style={{ color: 'var(--c-review)' }}>{inProgress}</div></div>
+        <div className="stat"><div className="label">{t('g.critical')}</div><div className="value" style={{ color: 'var(--c-behind)' }}>{crit}</div></div>
+        <div className="stat"><div className="label">{t('g.resolved')}</div><div className="value" style={{ color: 'var(--c-on-track)' }}>{resolved}</div></div>
       </div>
 
       <div className="data-table">
         <div className="data-table-body">
-          {loading ? <div className="empty">Loading...</div> :
-           filtered.length === 0 ? <div className="empty">Chưa có issue nào</div> :
+          {loading ? <div className="empty">{t('g.loading')}</div> :
+           filtered.length === 0 ? <div className="empty">{t('iss.empty')}</div> :
            <table>
              <thead>
                <tr>
-                 <th>ID</th>
-                 <th>Severity</th>
-                 <th>Title</th>
-                 <th>Category</th>
-                 <th>Source</th>
-                 <th>Status</th>
-                 <th>Created</th>
+                 <th>{th("ID")}</th>
+                 <th>{th("Mức độ")}</th>
+                 <th>{th("Tiêu đề")}</th>
+                 <th>{th("Phân loại")}</th>
+                 <th>{th("Nguồn")}</th>
+                 <th>{th("Trạng thái")}</th>
+                 <th>{th("Đã tạo")}</th>
                </tr>
              </thead>
              <tbody>
-               {filtered.map(i => {
+               {page.visible.map(i => {
                  const sev = SEV_COLORS[i.severity] || SEV_COLORS.MEDIUM;
                  const rowCls = i.severity === 'CRITICAL' ? 'critical' : i.severity === 'HIGH' ? 'exception' : '';
                  return (
@@ -155,68 +186,82 @@ export default function Issues() {
              </tbody>
            </table>
           }
+          {truncated && (
+            <div className="meta" style={{ marginTop: 8, color: 'var(--c-pending)' }}>
+              Đang hiện {items.length} / {total} sự cố. Dùng ô tìm kiếm hoặc bộ lọc để
+              thu hẹp, hoặc chọn 100 dòng mỗi trang.
+            </div>
+          )}
+          {!loading && (
+            <TablePagination
+              page={page.page}
+              pageCount={page.pageCount}
+              total={page.total}
+              pageSize={page.pageSize}
+              onPageChange={page.setPage}
+              onPageSizeChange={page.changePageSize}
+              unitKey="unit.issue"
+            />
+          )}
         </div>
       </div>
 
       {/* Add issue modal */}
       {showAddModal && (
-        <div className="modal-backdrop" onClick={() => !addBusy && setShowAddModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 540 }}>
-            <h3>Tạo Issue mới</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 12 }}>
-              <label style={{ gridColumn: 'span 2' }}>
-                <div style={{ fontSize: 11, color: 'var(--c-text-2)' }}>Tiêu đề *</div>
-                <input value={addForm.title} onChange={e => setAddForm({...addForm, title: e.target.value})} style={{ width: '100%', padding: 6 }} required />
-              </label>
-              <label>
-                <div style={{ fontSize: 11, color: 'var(--c-text-2)' }}>Severity</div>
-                <select value={addForm.severity} onChange={e => setAddForm({...addForm, severity: e.target.value})} style={{ width: '100%', padding: 6 }}>
-                  <option value="CRITICAL">Critical</option>
-                  <option value="HIGH">High</option>
-                  <option value="MEDIUM">Medium</option>
-                  <option value="LOW">Low</option>
-                </select>
-              </label>
-              <label>
-                <div style={{ fontSize: 11, color: 'var(--c-text-2)' }}>Category</div>
-                <select value={addForm.category} onChange={e => setAddForm({...addForm, category: e.target.value})} style={{ width: '100%', padding: 6 }}>
-                  <option value="PROGRESS">Progress</option>
-                  <option value="QUALITY">Quality</option>
-                  <option value="MATERIAL">Material</option>
-                  <option value="PAYMENT">Payment</option>
-                  <option value="DESIGN">Design</option>
-                  <option value="SAFETY">Safety</option>
-                </select>
-              </label>
-              <label style={{ gridColumn: 'span 2' }}>
-                <div style={{ fontSize: 11, color: 'var(--c-text-2)' }}>Mô tả</div>
-                <textarea value={addForm.body} onChange={e => setAddForm({...addForm, body: e.target.value})} rows={4} style={{ width: '100%', padding: 6, fontFamily: 'inherit' }} />
-              </label>
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
-              <button className="btn btn-secondary" onClick={() => setShowAddModal(false)} disabled={addBusy}>Hủy</button>
-              <button className="btn" onClick={async () => {
-                if (!addForm.title) { toast.error('Tiêu đề bắt buộc'); return; }
-                if (!selectedProject) { toast.error('Chọn dự án trước'); return; }
-                setAddBusy(true);
-                try {
-                  const r = await fetch(`/api/projects/${selectedProject}/issues`, {
-                    method: 'POST',
-                    headers: { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ...addForm, project_id: Number(selectedProject) })
-                  }).then(r => r.json());
-                  if (r.error) throw new Error(r.error);
-                  toast.success('Đã tạo issue #' + r.id);
-                  setItems([r, ...items]);
-                  setShowAddModal(false);
-                  setAddForm({ title: '', body: '', category: 'PROGRESS', severity: 'MEDIUM' });
-                } catch (e) {
-                  toast.error('Lỗi: ' + e.message);
-                } finally { setAddBusy(false); }
-              }} disabled={addBusy}>{addBusy ? '...' : 'Tạo'}</button>
-            </div>
+        <Modal onClose={() => !addBusy && setShowAddModal(false)} maxWidth={540}>
+          <h3>{t('iss.create_new')}</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 12 }}>
+            <label style={{ gridColumn: 'span 2' }}>
+              <div style={{ fontSize: 11, color: 'var(--c-text-2)' }}>{t('iss.lbl_title')}</div>
+              <input value={addForm.title} onChange={e => setAddForm({...addForm, title: e.target.value})} style={{ width: '100%', padding: 6 }} required />
+            </label>
+            <label>
+              <div style={{ fontSize: 11, color: 'var(--c-text-2)' }}>{t('g.severity')}</div>
+              <select value={addForm.severity} onChange={e => setAddForm({...addForm, severity: e.target.value})} style={{ width: '100%', padding: 6 }}>
+                <option value="CRITICAL">{t('g.critical')}</option>
+                <option value="HIGH">{t('g.sev_high')}</option>
+                <option value="MEDIUM">{t('g.sev_medium')}</option>
+                <option value="LOW">{t('g.sev_low')}</option>
+              </select>
+            </label>
+            <label>
+              <div style={{ fontSize: 11, color: 'var(--c-text-2)' }}>{t('g.category')}</div>
+              <select value={addForm.category} onChange={e => setAddForm({...addForm, category: e.target.value})} style={{ width: '100%', padding: 6 }}>
+                <option value="PROGRESS">{t('g.progress')}</option>
+                <option value="QUALITY">{t('g.quality')}</option>
+                <option value="MATERIAL">{t('g.material')}</option>
+                <option value="PAYMENT">{t('g.payment')}</option>
+                <option value="DESIGN">{t('g.design')}</option>
+                <option value="SAFETY">{t('g.safety')}</option>
+              </select>
+            </label>
+            <label style={{ gridColumn: 'span 2' }}>
+              <div style={{ fontSize: 11, color: 'var(--c-text-2)' }}>{t('iss.lbl_desc')}</div>
+              <textarea value={addForm.body} onChange={e => setAddForm({...addForm, body: e.target.value})} rows={4} style={{ width: '100%', padding: 6, fontFamily: 'inherit' }} />
+            </label>
           </div>
-        </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
+            <button className="btn btn-secondary" onClick={() => setShowAddModal(false)} disabled={addBusy}>{t('iss.btn_cancel')}</button>
+            <button className="btn" onClick={async () => {
+              if (!addForm.title) { toast.error(t('iss.need_title')); return; }
+              if (!selectedProject) { toast.error(t('iss.pick_project')); return; }
+              setAddBusy(true);
+              try {
+                const r = await request(`/projects/${selectedProject}/issues`, {
+                  method: 'POST',
+                  body: { ...addForm, project_id: Number(selectedProject) },
+                });
+                if (r.error) throw new Error(r.error);
+                toast.success(t('iss.toast_created') + r.id);
+                setItems([r, ...items]);
+                setShowAddModal(false);
+                setAddForm({ title: '', body: '', category: 'PROGRESS', severity: 'MEDIUM' });
+              } catch (e) {
+                toast.error(t('iss.err_generic') + e.message);
+              } finally { setAddBusy(false); }
+            }} disabled={addBusy}>{addBusy ? '...' : t('iss.btn_create2')}</button>
+          </div>
+        </Modal>
       )}
     </div>
   );

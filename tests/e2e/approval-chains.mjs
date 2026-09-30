@@ -3,8 +3,12 @@
 // direct APPROVED blocked (422) → PM passes L1, PM blocked at L2 (403) →
 // ADMIN passes L2 → APPROVED → approval-state shows chain → cleanup.
 // Run: BASE_URL=http://localhost:3000 node tests/e2e/approval-chains.mjs
+import { cleanupProjectsOnExit } from './lib-cleanup.mjs';
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
 
+
+// Dọn dự án thử nghiệm nếu bài dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupProjectsOnExit(['CH-TEST-%', 'CH-DEPT-%'], { label: 'approval-chains' });
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); cond ? pass++ : fail++; };
 async function api(path, opts = {}) {
@@ -20,7 +24,8 @@ const loginAs = async (email) => (await api('/api/auth/login', {
 
 const adminT = await loginAs('admin@hbg.com');
 const pmT = await loginAs('pm@hbg.com');
-ok(!!adminT && !!pmT, 'login admin + pm');
+const siteT = await loginAs('site@hbg.com');
+ok(!!adminT && !!pmT && !!siteT, 'login admin + pm + site');
 const AH = { Authorization: `Bearer ${adminT}`, 'Content-Type': 'application/json' };
 const PH = { Authorization: `Bearer ${pmT}`, 'Content-Type': 'application/json' };
 const J = (H, b) => ({ headers: H, body: JSON.stringify(b) });
@@ -31,6 +36,8 @@ ok(Array.isArray(users.data) && users.data.length >= 7, `admin users list (${use
 ok(users.data.every(u => !('password_hash' in u)), 'no password_hash leaked');
 const pmDenied = await api('/api/admin/users', { headers: PH });
 ok(pmDenied.status === 403, `pm blocked from /admin (${pmDenied.status})`);
+const siteChains = await api('/api/approval-chains', { headers: { Authorization: `Bearer ${siteT}` } });
+ok(siteChains.status === 403, `site blocked from approval chain config (${siteChains.status})`);
 
 // 2. invalid chain rejected
 const badChain = await api('/api/approval-chains', { method: 'POST', ...J(AH, {
@@ -69,7 +76,7 @@ await api(`/api/shop-drawings/${sdId}/transition`, { method: 'POST', ...J(AH, { 
 const shortcut = await api(`/api/shop-drawings/${sdId}/transition`, { method: 'POST', ...J(AH, { to_status: 'APPROVED' }) });
 ok(shortcut.status === 422, `direct APPROVED blocked under chain (${shortcut.status})`);
 const l2early = await api(`/api/shop-drawings/${sdId}/approve-level`, { method: 'POST', ...J(AH, { level: 2, response: 'P' }) });
-ok(l2early.status === 409, `L2 before L1 blocked 409 (${l2early.status})`);
+ok(l2early.status === 422, `L2 before L1 blocked 422 (${l2early.status})`);
 const l1pm = await api(`/api/shop-drawings/${sdId}/approve-level`, { method: 'POST', ...J(PH, { level: 1, response: 'P', comment: 'PM ok' }) });
 ok(l1pm.status === 200 && l1pm.data?.status === 'SUBMITTED', 'PM passes L1 (stays SUBMITTED)');
 const l2pm = await api(`/api/shop-drawings/${sdId}/approve-level`, { method: 'POST', ...J(PH, { level: 2, response: 'P' }) });
@@ -81,7 +88,7 @@ ok(state.data?.chain?.length === 2 && state.data?.is_fully_approved === true, 'a
 
 // 5. cleanup: drawing + chain (back to legacy)
 const { execSync } = await import('node:child_process');
-execSync(`bash backend/scripts/pg-ctl.sh psql -c "DELETE FROM shop_drawings WHERE id = ${sdId};" > /dev/null`, { encoding: 'utf8', cwd: '/home/vutun/pmo_project' });
+execSync(`bash backend/scripts/pg-ctl.sh psql -c "DELETE FROM shop_drawings WHERE id = ${sdId};" > /dev/null`, { encoding: 'utf8', cwd: new URL('../..', import.meta.url).pathname });
 const del = await api(`/api/approval-chains/${chainId}`, { method: 'DELETE', headers: AH });
 ok(del.status === 200, 'chain deleted (legacy restored)');
 
@@ -103,7 +110,7 @@ if (kt) {
   ok(cut.status === 200, `1-level dept chain allows shortcut (${cut.status})`);
   await api('/api/projects/1', { method: 'PATCH', ...J(AH, { department_id: null }) });
   await api(`/api/approval-chains/${ktChain.data?.id}`, { method: 'DELETE', headers: AH });
-  execSync(`bash backend/scripts/pg-ctl.sh psql -c "DELETE FROM shop_drawings WHERE id = ${sd2.data?.id};" > /dev/null`, { encoding: 'utf8', cwd: '/home/vutun/pmo_project' });
+  execSync(`bash backend/scripts/pg-ctl.sh psql -c "DELETE FROM shop_drawings WHERE id = ${sd2.data?.id};" > /dev/null`, { encoding: 'utf8', cwd: new URL('../..', import.meta.url).pathname });
   ok(true, 'dept override cleaned');
 }
 

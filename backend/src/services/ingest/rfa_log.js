@@ -2,7 +2,7 @@
 // PG-only. Mô hình A wizard: parse() returns rows, commit() inserts them.
 import { getDb } from '../../db/index.js';
 import { recordFailure } from './failures.js';
-import { readSheet, toText, toInt, toDate, findDataStart } from '../../lib/excel.js';
+import { readSheet, readWorkbook, toText, toInt, toDate, findDataStart } from '../../lib/excel.js';
 
 const HEADER_KEYWORDS = ['stt', 'tt', 'no', 'no.', 'rfa', 'mcr', 'mã'];
 
@@ -24,8 +24,7 @@ function parseRow(row) {
 }
 
 export async function parse(filePath, projectId) {
-  const XLSX = (await import('xlsx')).default;
-  const wb = XLSX.readFile(filePath, { cellDates: true });
+  const wb = readWorkbook(filePath);
   const sheets = [];
   for (const sheetName of wb.SheetNames) {
     const rows = readSheet(filePath, sheetName);

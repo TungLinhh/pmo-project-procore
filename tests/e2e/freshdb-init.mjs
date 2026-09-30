@@ -4,7 +4,9 @@
 // second init.js run idempotent.
 // Run: PGHOST/PGPORT/PGUSER/PGPASSWORD env (defaults local dev) —
 //   node tests/e2e/freshdb-init.mjs
+import { waitForServer } from './lib.mjs';
 import { execSync, spawn } from 'node:child_process';
+import { userInfo } from 'node:os';
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
@@ -20,7 +22,9 @@ const PSQL = `PGPASSWORD=${PG.password} psql -h ${PG.host} -p ${PG.port} -U ${PG
 const psqlDb = (db, sql) => execSync(`${PSQL} -d ${db} -t -A -c "${sql.replace(/"/g, '\\"')}"`, { encoding: 'utf8' }).trim();
 // DB create/drop needs a superuser: local socket peer auth as the OS user.
 // App traffic always uses pmo_user over TCP (same as CI/prod wiring).
-const SUPERPSQL = `psql -h /tmp -p ${PG.port} -U vutun`;
+const SUPERUSER = process.env.PG_SUPERUSER || process.env.USER || userInfo().username;
+const SUPERHOST = process.env.PG_SUPERHOST || '/tmp';
+const SUPERPSQL = `${process.env.PSQL_BIN || 'psql'} -h ${SUPERHOST} -p ${PG.port} -U ${SUPERUSER}`;
 const superpsql = (sql) => execSync(`${SUPERPSQL} -d postgres -c "${sql}"`, { encoding: 'utf8' });
 
 // 0. genuinely empty database (superuser creates it, pmo_user owns it)
@@ -43,11 +47,29 @@ if (!failures) {
   ok(psqlDb(DBNAME, 'SELECT count(*) FROM projects;') === '1', 'one demo project seeded (BTE only)');
   ok(Number(psqlDb(DBNAME, "SELECT count(*) FROM zones WHERE project_id = (SELECT id FROM projects WHERE code = 'BTE-WP4-HBC');")) >= 19, 'BTE zones seeded');
   ok(psqlDb(DBNAME, 'SELECT count(*) FROM issues;') === '0', 'issues table exists (empty)');
+  ok(psqlDb(DBNAME, 'SELECT count(*) FROM ai_provider_configs;') === '3', 'demo AI routes seeded (primary + fallback + embed)');
+}
+
+// Cấp quyền cho **app role** trên database sạt — grant gắn theo database, nên role có
+// quyền trên DB dev chưa chắc có trên DB vừa tạo. Không cấp thì request pool trả
+// `500 permission denied for table …` (đo 2026-09-28: `GET /api/dashboard` trả 500 trên
+// DB sạch, trong khi gate chạy trên DB dev nên không thấy). Nhân vật chạy lệnh này là
+// **admin** — đúng vai trò chạy lệnh cấp quyền ngoài đời.
+{
+  const appUser = process.env.APP_DB_USER || 'pmo_app';
+  superpsql(`GRANT CONNECT ON DATABASE ${DBNAME} TO ${appUser};`);
+  const grant = [
+    `GRANT USAGE ON SCHEMA public TO ${appUser};`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${appUser};`,
+    `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${appUser};`,
+  ].join(' ');
+  execSync(`psql -h ${PG.host} -p ${PG.port} -U ${PG.user} -d ${DBNAME} -c "${grant}"`, { encoding: 'utf8' });
+  ok(true, `app role ${appUser} được cấp quyền trên ${DBNAME}`);
 }
 
 // 3. boot backend on the fresh DB, verify real HTTP responses are non-empty
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: FRESH_URL, PORT: '3220' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer('http://localhost:3220');
 try {
   const BASE = 'http://localhost:3220';
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) });

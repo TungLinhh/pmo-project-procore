@@ -1,5 +1,6 @@
 // P0-04: sessions expire (JWT); no admin fallback for missing/invalid/expired tokens.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p0-04-session.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 
 let failures = 0;
@@ -10,7 +11,9 @@ async function boot(port, extraEnv) {
   const srv = spawn('node', ['backend/src/index.js'], {
     env: { ...process.env, DATABASE_URL: DB, PORT: String(port), ...extraEnv }, stdio: 'ignore',
   });
-  await new Promise(r => setTimeout(r, 3500));
+  // Chờ **đúng cổng vừa spawn**. Đợt 18 tôi cứng `3103` ở đây ⇒ lần `boot(3104, …)`
+  // chờ nhầm cổng đã tắt ⇒ hết giờ và đỏ, trông như hỏng sản phẩm.
+  await waitForServer(`http://localhost:${port}`);
   ok(srv.exitCode === null || srv.exitCode === undefined, `server booted on ${port}`);
   return srv;
 }

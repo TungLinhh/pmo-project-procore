@@ -8,6 +8,7 @@
 //
 // Families: shop | schedule | material | payment_ar | submittal | process |
 //           team | resource | reference | unknown
+import { need } from './optional-dep.js';
 export function norm(s) {
   return String(s || '').toLowerCase().replace(/_/g, ' ').replace(/-/g, ' ')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -127,7 +128,7 @@ export function classifyFile(relativePath, filename) {
 // Content probe (needs xlsx read): locked? zero-cell reference?
 // Returns { locked, sheets: [{name, cells}], empty } — pure inspection.
 export async function probeWorkbook(filePath) {
-  const XLSX = (await import('xlsx')).default;
+  const XLSX = await need('xlsx');
   try {
     const wb = XLSX.readFile(filePath);
     const sheets = (wb.SheetNames || []).map(n => {

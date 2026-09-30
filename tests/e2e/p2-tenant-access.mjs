@@ -1,15 +1,22 @@
 // P2-11: tenant + project isolation — membership gate, cross-tenant 404 (not 403,
 // no existence leak), creator auto-member. Real PG + server.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p2-tenant-access.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
+import { cleanupProjectsOnExit, cleanupTenantsOnExit } from './lib-cleanup.mjs';
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3107';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3107' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 
+
+// Dọn dự án thử nghiệm nếu bài dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupProjectsOnExit(['PM-NEW-%', 'SITE-NEW-%', 'T2-%'], { label: 'p2-tenant-access' });
+// Tenant thừa cũng là rác: nó xuất hiện trong mọi bài đếm khách hàng.
+cleanupTenantsOnExit(['T2-%'], { label: 'p2-tenant-access' });
 try {
   const loginAs = async (email) => fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: 'admin123' }) }).then(r => r.json()).then(j => j.token);
   const siteT = await loginAs('site@hbg.com');
@@ -49,11 +56,17 @@ try {
   const r3c = await fetch(BASE + `/api/projects/${p2.id}/issues`, { method: 'POST', headers: { ...H(siteT), 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'sneak' }) }).then(r => r.status);
   ok(r3c === 404, 'cross-tenant write → 404');
 
-  // 4. creator auto-member of new project
-  const created = await fetch(BASE + '/api/projects', { method: 'POST', headers: { ...H(siteT), 'Content-Type': 'application/json' }, body: JSON.stringify({ code: `SITE-NEW-${Date.now()}` }) }).then(async r => ({ s: r.status, j: await r.json() }));
-  ok(created.s === 201, `site creates project (got ${created.s})`);
-  const r4 = await get(siteT, `/api/projects/${created.j.id}/construction-schedule?limit=1`);
+  // 4. Only project-management roles can create a project; the creator is a member.
+  const pmT = await loginAs('pm@hbg.com');
+  const siteCreate = await fetch(BASE + '/api/projects', { method: 'POST', headers: { ...H(siteT), 'Content-Type': 'application/json' }, body: JSON.stringify({ code: `SITE-NEW-${Date.now()}` }) });
+  ok(siteCreate.status === 403, `site cannot create project (got ${siteCreate.status})`);
+  const created = await fetch(BASE + '/api/projects', { method: 'POST', headers: { ...H(pmT), 'Content-Type': 'application/json' }, body: JSON.stringify({ code: `PM-NEW-${Date.now()}` }) }).then(async r => ({ s: r.status, j: await r.json() }));
+  ok(created.s === 201, `PM creates project (got ${created.s})`);
+  const r4 = await get(pmT, `/api/projects/${created.j.id}/construction-schedule?limit=1`);
   ok(r4.s === 200, 'creator reads own new project');
+  const siteProjects = await get(siteT, '/api/projects');
+  ok(siteProjects.s === 200 && !siteProjects.j.some((p) => Number(p.id) === Number(created.j.id)),
+    'same-tenant non-member project hidden from list');
 
   // cleanup
   await db.prepare('DELETE FROM construction_schedule_items WHERE project_id = ?').runAsync(p2.id);
@@ -61,8 +74,10 @@ try {
   await db.prepare('DELETE FROM project_members WHERE project_id = ?').runAsync(p2.id);
   await db.prepare('DELETE FROM projects WHERE id = ?').runAsync(p2.id);
   await db.prepare('DELETE FROM tenants WHERE id = ?').runAsync(t2.id);
-  await db.prepare('DELETE FROM project_members WHERE project_id = ?').runAsync(created.j.id);
-  await db.prepare('DELETE FROM projects WHERE id = ?').runAsync(created.j.id);
+  if (created.j?.id) {
+    await db.prepare('DELETE FROM project_members WHERE project_id = ?').runAsync(created.j.id);
+    await db.prepare('DELETE FROM projects WHERE id = ?').runAsync(created.j.id);
+  }
 } finally {
   srv.kill('SIGTERM');
   await new Promise(r => setTimeout(r, 1000));

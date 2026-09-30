@@ -1,6 +1,7 @@
 // P2-10: JWT sessions — access JWT shape, tamper rejection, refresh rotation
 // (single-use), logout kill, logout-all kill, short-TTL expiry. Real PG + server.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p2-jwt-auth.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 
 let failures = 0;
@@ -9,7 +10,7 @@ const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.
 const BASE = 'http://localhost:3107';
 // short access TTL to prove expiry without waiting 24h
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3107', ACCESS_TTL_SEC: '3' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 
 try {
   const login = (email, password) => fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) }).then(async r => ({ s: r.status, j: await r.json().catch(() => ({})) }));
@@ -31,8 +32,21 @@ try {
   refresh = r1.j.refresh_token;
 
   // expiry: access dies after 3s TTL, refresh survives
-  await new Promise(r => setTimeout(r, 3500));
-  ok((await me(access)) === 401, 'expired access → 401');
+  //
+  // Chờ **token thật sự bị từ chối**, không đoán số giây. `sleep(3500)` ở đây từng là
+  // "chờ TTL 3s hết" chứ không phải "chờ server lên" — đợt 18 đã thay nhầm nó bằng
+  // `waitForServer(BASE)` (hàm đó trả về **ngay** vì server đã lên) ⇒ token còn hiệu
+  // lực ⇒ bài đỏ. Bài kiểm nói đúng điều cần nói: chờ mã cho tới khi server từ chối, có
+  // trần; nhanh hơn và không phụ thuộc độ trễ máy.
+  const expired = await (async () => {
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      if ((await me(access)) === 401) return true;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return false;
+  })();
+  ok(expired, 'expired access → 401');
   const r2 = await fetch(BASE + '/api/auth/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: refresh }) }).then(async r => ({ s: r.status, j: await r.json().catch(() => ({})) }));
   ok(r2.s === 200 && (await me(r2.j.token)) === 200, 'refresh after expiry works');
 

@@ -2,8 +2,8 @@
 import { chromium } from 'playwright';
 import { join } from 'node:path';
 
-const BASE = 'http://localhost:3000';
-const SHOTS = '/home/vutun/pmo_project/docs/bug_screenshots';
+const BASE = process.env.BASE_URL || 'http://localhost:3000';
+const SHOTS = path.resolve('docs/bug_screenshots');
 
 const browser = await chromium.launch({ headless: true });
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });

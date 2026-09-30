@@ -1,7 +1,8 @@
 // V7 mobile screens - 13 HQ only
 import { chromium } from 'playwright';
-const BASE = 'http://localhost:3000';
-const SHOTS = '/home/vutun/pmo_project/docs/bug_screenshots';
+import path from 'node:path';
+const BASE = process.env.BASE_URL || 'http://localhost:3000';
+const SHOTS = path.resolve('docs/bug_screenshots');
 const browser = await chromium.launch({ headless: true });
 const ctx = await browser.newContext({ viewport: { width: 375, height: 812 } });
 const page = await ctx.newPage();

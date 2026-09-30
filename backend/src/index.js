@@ -14,6 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getDb, closeDb } from './db/index.js';
 import { installAsyncSafetyNet, wrapAllRouters } from './lib/async-handler.js';
+import { errorBody } from './lib/error-body.js';
 
 // P0-2 safety net FIRST: patches Router.METHOD/use so any bare async handler
 // rejection flows to the Express error handler instead of hanging.
@@ -21,19 +22,21 @@ installAsyncSafetyNet();
 // Retroactive half of the net (P3): route modules above already registered
 // with the unpatched prototype (import hoisting) — wrap their stacks in place.
 wrapAllRouters([
-  authRouter, meRouter, projectsRouter, issuesRouter, auditRouter, kpiRouter,
+  authRouter, meRouter, privacyRouter, ssoRouter, projectsRouter, issuesRouter, auditRouter, kpiRouter,
   kpiTargetsRouter, shopRouter, materialSubmittalsRouter, paymentRouter,
   notificationsRouter, directivesRouter, materialsRouter, dailyRouter,
   syncRouter, dashboardRouter, masterDataRouter, businessProcessRouter,
   uploadRouter, batchRouter, classifyRouter, otdRouter, jobsRouter,
   approvalChainsRouter, adminRouter, scheduleLinksRouter,
   scheduleCompressRouter, holidaysRouter, aiRouter, aiAssistantRouter,
-  bimRouter, exportRouter, erpRouter, streamRouter,
+  bimRouter, exportRouter, erpRouter, streamRouter, pillarScenariosRouter, qaRouter, workItemsRouter,
 ]);
 import { registerWizardRoutes } from './routes/wizard.js';
 
 import authRouter from './routes/auth.js';
+import ssoRouter from './routes/sso.js';
 import meRouter from './routes/me.js';
+import privacyRouter from './routes/privacy.js';
 import projectsRouter from './routes/projects.js';
 import issuesRouter from './routes/issues.js';
 import auditRouter from './routes/audit.js';
@@ -59,6 +62,8 @@ import approvalChainsRouter from './routes/approval-chains.js';
 import adminRouter from './routes/admin.js';
 import scheduleLinksRouter from './routes/schedule-links.js';
 import scheduleCompressRouter from './routes/schedule-compress.js';
+import pillarScenariosRouter from './routes/pillar-scenarios.js';
+import workItemsRouter from './routes/work-items.js';
 import holidaysRouter from './routes/holidays.js';
 import aiRouter from './routes/ai.js';
 import aiAssistantRouter from './routes/ai-assistant.js';
@@ -66,26 +71,94 @@ import bimRouter from './routes/bim.js';
 import exportRouter from './routes/export.js';
 import erpRouter from './routes/erp.js';
 import streamRouter from './routes/stream.js';
+import qaRouter from './routes/qa.js';
+import { evaluateProductionEnv } from './lib/production-readiness.js';
+
+if (process.env.NODE_ENV === 'production' && process.env.PRODUCTION_ENFORCE_READINESS === '1') {
+  const failed = evaluateProductionEnv().filter((check) => !check.ok);
+  if (failed.length) {
+    throw new Error(`Production readiness failed: ${failed.map((check) => `${check.id} (${check.detail})`).join(', ')}`);
+  }
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-app.use(cors());
+// CORS: dev keeps the permissive default so the Vite proxy / local tooling
+// keeps working. Production must name its origins explicitly — bare `cors()`
+// answers every origin with `Access-Control-Allow-Origin: *`, which lets any
+// site read unauthenticated responses (health, upload review, ...).
+// Single-port production serves the SPA itself, so it needs no CORS at all.
+const corsOrigins = String(process.env.CORS_ORIGIN || '')
+  .split(',').map((value) => value.trim()).filter(Boolean);
+if (process.env.NODE_ENV === 'production' && corsOrigins.length === 0) {
+  app.use(cors({ origin: false }));
+} else if (corsOrigins.length > 0) {
+  app.use(cors({ origin: corsOrigins, credentials: false }));
+} else {
+  app.use(cors());
+}
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Trust proxy if behind Cloudflare tunnel
-app.set('trust proxy', true);
+// Only trust the exact configured proxy depth. `true` lets clients forge
+// X-Forwarded-For and bypass IP-based login/export limits.
+const trustProxy = String(process.env.TRUST_PROXY || '').trim();
+if (trustProxy === 'true') app.set('trust proxy', 1);
+else if (/^\d+$/.test(trustProxy)) app.set('trust proxy', Number(trustProxy));
+
+// Task 10 (SRS NFR Bao mat: ma hoa khi TRUYEN TAI): headers toi thieu, khong
+// CSP (pha inline <style> cua App.jsx). HSTS chi khi dang https (sau proxy),
+// tranh khoa localhost http. TLS ket thuc o reverse proxy — xem DOCKER.md.
+app.use((req, res, next) => {
+  const proto = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
+  if (proto === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('X-Frame-Options', 'DENY');
+  next();
+});
 
 // ============ Health ============
-app.get('/api/health', async (req, res) => {
+// Two endpoints, because a probe that cannot fail is worse than no probe:
+//   /api/health  liveness  — the process is up; never touches the DB
+//   /api/ready   readiness — the DB answers and the pool is not exhausted.
+// The old single endpoint returned a hardcoded `ok`, so a dead database still
+// looked healthy and nothing restarted or paged anyone.
+app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
+    uptime_s: Math.round(process.uptime()),
     authenticated: false,
     user: null,
   });
+});
+
+app.get('/api/ready', async (req, res) => {
+  const started = Date.now();
+  try {
+    const { getDb } = await import('./db/index.js');
+    const db = getDb();
+    await db.prepare('SELECT 1 AS ok').getAsync();
+    const latencyMs = Date.now() - started;
+    // Degraded, not failed, once the DB answers but slowly: alerting on a slow
+    // database is more useful than restarting a process that is working.
+    res.json({
+      status: latencyMs > 2000 ? 'degraded' : 'ok',
+      db: { ok: true, latency_ms: latencyMs },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (e) {
+    res.status(503).json({
+      status: 'unavailable',
+      db: { ok: false, error: String(e?.message || e).slice(0, 200) },
+      timestamp: new Date().toISOString(),
+    });
+  }
 });
 
 // ============ Mount routers ============
@@ -95,9 +168,12 @@ app.get('/api/health', async (req, res) => {
 // (header-only) on every subpath, which would 401 the query-token SSE handshake
 // before streamRouter is ever reached (Wave D3 lesson).
 app.use('/api/stream', streamRouter);                       // SSE realtime (Wave D3)
+app.use('/api/auth/sso', ssoRouter);                      // SSO OIDC IdP ngoai (task 10, JSON-only)
 app.use('/api/auth', authRouter);
+app.use('/api/me', privacyRouter);                        // PDPL self-service (task 10, truoc meRouter)
 app.use('/api/me', meRouter);
 app.use('/api/projects/:id/kpi-targets', kpiRouter);          // /api/projects/:id/kpi-targets (GET list, POST, GET history)
+app.use('/api', workItemsRouter);                              // canonical WBS/work-item links
 app.use('/api/projects', projectsRouter);                      // includes /:id/issues POST etc.
 app.use('/api/kpi-targets', kpiTargetsRouter);                // PUT /api/kpi-targets/:id
 app.use('/api/issues', issuesRouter);
@@ -119,6 +195,8 @@ app.use('/api/approval-chains', approvalChainsRouter);  // chain config (Wave 2)
 app.use('/api/admin', adminRouter);                     // user list + department assign
 app.use('/api', scheduleLinksRouter);                   // schedule dependency links (v0.6.0)
 app.use('/api', scheduleCompressRouter);                // compression preview/apply/rollback (v0.6.0)
+app.use('/api', pillarScenariosRouter);                  // pillar what-if CTL-01→06 (GĐ2, SRS 4.2)
+app.use('/api', qaRouter);                                 // QA/QC extension pillar
 app.use('/api', holidaysRouter);                        // site holidays global+tenant (v0.6.1)
 app.use('/api/ai', aiRouter);                               // AI config + usage (v0.7.0)
 app.use('/api/ai', aiAssistantRouter);                      // AI ask + drafts (v0.7.0)
@@ -140,25 +218,36 @@ app.use('/api/erp', erpRouter);                             // ERP profiles + pu
 // ORDER MATTERS (P3-12 fix): static subpaths (/review, /batch, /classify)
 // must win over uploadRouter's greedy GET /:id — the old order let
 // GET /api/upload/review fall into /:id with id='review' (400). Specific
-// routers mount first on BOTH prefixes.
+// routers mount first on BOTH prefixes. The wizard routes are also mounted
+// before uploadRouter so /doc-types is not parsed as an integer upload id.
+registerWizardRoutes(app);
 app.use('/api/upload', classifyRouter); // POST /api/upload/classify, GET /api/upload/review
 app.use('/api/upload', batchRouter); // POST /api/upload/batch (zip intake)
 app.use('/api/upload', uploadRouter);
 app.use('/api/uploads', classifyRouter); // GET /api/uploads/review (+alias POST /classify)
 app.use('/api/uploads', uploadRouter);                         // GET list
 
-// Wizard (still legacy, separate file)
-registerWizardRoutes(app);
-
 // P0-2: unknown /api/* must be JSON 404, never the SPA HTML (the old
 // app.get('*') fallback swallowed missing API routes and SSE errors).
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
 // ============ Error handler (before SPA fallback so /api JSON errors survive) ============
+// Client-safe error body — shared with routes that answer 5xx directly
+// (see lib/error-body.js).
 app.use((err, req, res, next) => {
   console.error('[error]', err);
   if (res.headersSent) return next(err);
-  res.status(err.status || 500).json({ error: err.message || 'Internal error' });
+  // Multer rejects oversized/too-many uploads with its own error codes and no
+  // `status`, so an Excel file over the 50MB limit answered 500 "Internal
+  // error" — the user was told to retry something that can never succeed.
+  // Translate to the real reason and the right status.
+  if (err?.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: `File vượt quá giới hạn ${Math.round(err.limit / 1024 / 1024)}MB`, code: err.code });
+  }
+  if (err?.code === 'LIMIT_FILE_COUNT' || err?.code === 'LIMIT_UNEXPECTED_FILE') {
+    return res.status(400).json({ error: `Upload không hợp lệ (${err.code})`, code: err.code });
+  }
+  res.status(err.status || 500).json(errorBody(err));
 });
 
 // ============ Serve frontend (Vite build) ============
@@ -171,7 +260,7 @@ app.get('*', (req, res) => {
 app.use((err, req, res, next) => {
   console.error('[error:late]', err);
   if (res.headersSent) return next(err);
-  res.status(err.status || 500).json({ error: err.message || 'Internal error' });
+  res.status(err.status || 500).json(errorBody(err));
 });
 
 const server = app.listen(PORT, () => {

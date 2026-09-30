@@ -17,6 +17,9 @@
   --c-text-2: #475569;
   --c-text-3: #94a3b8;
   --c-text-inverse: #ffffff;
+  /* Chữ đặt trên nền đặc/sáng (primary, accent, chip màu). Ở dark mode các nền
+     đó hoá thành màu sáng nên token này bị đảo lại trong body.theme-dark. */
+  --c-text-i: #ffffff;
 
   /* Brand - navy */
   --c-primary: #1e3a5f;
@@ -37,6 +40,11 @@
   --c-critical: #7f1d1d;
   --c-critical-bg: #fef2f2;
   --c-critical-bar: #b91c1c;
+  /* Solid fill meant to carry WHITE text (badges, pills). Separate from the
+     health "ink" tokens, which are tuned to read as text/borders and are far
+     too light to sit behind white in dark mode. */
+  --c-solid-alert: #b91c1c;
+  --c-solid-alert-fg: #ffffff;
 
   /* Workflow */
   --c-draft: #64748b;
@@ -77,11 +85,63 @@ body {
 }
 a { color: var(--c-accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-button { font-family: inherit; cursor: pointer; }
+/* color: inherit — button KHÔNG kế thừa color theo UA stylesheet, nên mọi
+   <button> không đặt màu riêng sẽ ra chữ đen và chìm vào nền ở dark mode
+   (đo được: rgb(0,0,0) trên rgb(19,27,46) = 1.22:1 ở Cần xử lý và Thông báo). */
+button { font-family: inherit; cursor: pointer; color: inherit; }
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
 input, select, textarea { font-family: inherit; font-size: 13px; color: var(--c-text); }
 h1, h2, h3, h4 { font-weight: 600; color: var(--c-text); }
 
 /* ====== Health & workflow badges (mục 35) ====== */
+/* Nút phụ dùng ngoài wizard. Bộ nút của wizard đã được scope dưới .wizard-modal
+   để không đè kiểu của HQ, nên hai class này cần định nghĩa toàn cục — thiếu nó
+   thì nút rơi về mặc định UA (nền sáng #efefef) và chữ sáng trong dark mode,
+   tương phản 1.02:1. */
+.btn-primary {
+  background: var(--c-accent);
+  color: var(--c-text-i);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  padding: 6px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.btn-primary:hover:not(:disabled) { filter: brightness(1.06); }
+.btn-primary:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn-text {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--c-accent);
+  border-radius: var(--r-md);
+  padding: 3px 7px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.btn-text:hover:not(:disabled) { background: var(--c-surface-3); }
+.btn-text:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Chip màu bão hoà (Audit action). Chữ trắng trên #10b981 chỉ 2.3:1, trên
+   #3b82f6 3.7:1 — dưới ngưỡng AA. Dùng chữ tối trên nền sáng. */
+.audit-action-chip {
+  display: inline-block;
+  color: #0b1220;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.2px;
+}
+.actor-role { color: var(--c-text-3); }
+/* Chip xám mặc định dùng chữ tối; nền đã được làm sáng hơn trong
+   ACTION_COLORS (AuditLog.jsx) nên không cần override riêng theo hành động. */
+.theme-dark .audit-action-chip { color: #0b1220; }
+
 .badge {
   display: inline-flex;
   align-items: center;
@@ -130,7 +190,7 @@ h1, h2, h3, h4 { font-weight: 600; color: var(--c-text); }
 .btn:disabled { background: var(--c-border); border-color: var(--c-border); color: var(--c-text-3); cursor: not-allowed; }
 .btn.btn-secondary { background: var(--c-surface); color: var(--c-text); border: 1px solid var(--c-border-strong); }
 .btn.btn-secondary:hover { background: var(--c-surface-2); }
-.btn.btn-danger { background: var(--c-behind); border-color: var(--c-behind); }
+.btn.btn-danger { background: var(--c-solid-alert); border-color: var(--c-solid-alert); color: var(--c-solid-alert-fg); }
 .btn.btn-sm { padding: 4px 10px; font-size: 12px; }
 
 .input, .input-sm {
@@ -188,6 +248,15 @@ h1, h2, h3, h4 { font-weight: 600; color: var(--c-text); }
 .divider { height: 1px; background: var(--c-border); margin: 12px 0; }
 
 /* Spinner */
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 16px;
+  color: var(--c-text-2);
+  font-size: 12px;
+}
 .spinner {
   width: 14px;
   height: 14px;
@@ -374,6 +443,21 @@ h1, h2, h3, h4 { font-weight: 600; color: var(--c-text); }
   line-height: 1;
 }
 .toast-close:hover { color: var(--c-text); }
+
+@media (max-width: 768px) {
+  .bell-dropdown {
+    right: -8px;
+    width: calc(100vw - 24px);
+    max-height: 60vh;
+  }
+  .toast-container {
+    left: 12px;
+    right: 12px;
+    max-width: none;
+  }
+  .toast { min-width: 0; width: 100%; }
+  .modal-backdrop { padding: 24px 12px; }
+}
 @keyframes toast-in { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
 @keyframes toast-out { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(-20px); } }
 
@@ -384,11 +468,17 @@ body.theme-dark {
   --c-surface: #131b2e;     /* card bg */
   --c-surface-2: #1c2540;   /* nested card / input bg */
   --c-surface-3: #232f4f;   /* hover state */
-  /* Text - WCAG AA on dark */
-  --c-text: #d8dee9;        /* primary text - light gray, NOT pure white */
-  --c-text-2: #a4b0c0;      /* secondary - 4.5:1 on bg */
-  --c-text-3: #6b7891;      /* tertiary */
-  --c-text-i: #1c2540;      /* on accent (inverse) */
+  /* Text - WCAG AA on dark. --c-text-3 phải đạt 4.5:1 trên CẢ --c-surface
+     (19,27,46) lẫn --c-bg (11,18,32), nếu không nhãn phụ và tên nhóm trong
+     sidebar sẽ chìm vào nền (đo được 3.86:1 với #6b7891). */
+  --c-text: #e8edf5;        /* primary text */
+  --c-text-2: #b6c2d2;      /* secondary */
+  --c-text-3: #94a2ba;      /* tertiary — 5.0:1 trên surface, 5.6:1 trên bg */
+  --c-text-i: #0d1526;      /* trên nền sáng (primary/accent) */
+  /* Trên nền sáng ở dark mode (--c-primary hoá thành #7cb9ff) phải dùng chữ
+     tối; giữ trắng chỉ còn 2.05:1. Cả ba chỗ dùng token này đều nằm trên
+     nền sáng, nên đảo ở dark mode là đúng cho cả ba. */
+  --c-text-inverse: #0d1526;
   /* Borders - visible on dark */
   --c-border: #2d3a5a;      /* default */
   --c-border-2: #3d4d75;    /* hover/focus */
@@ -405,13 +495,17 @@ body.theme-dark {
   --c-behind-bg: rgba(251, 146, 60, 0.12);
   --c-critical: #f87171;    /* red-400 */
   --c-critical-bg: rgba(248, 113, 113, 0.12);
+  /* Still a dark fill in dark mode: white text needs a dark backdrop, and the
+     bright accent colours cannot provide one. */
+  --c-solid-alert: #991b1b;
+  --c-solid-alert-fg: #ffffff;
   --c-review: #a78bfa;      /* violet-400 */
   --c-review-bg: rgba(167, 139, 250, 0.12);
   --c-pending: #93c5fd;     /* blue-300 */
   --c-pending-bg: rgba(147, 197, 253, 0.12);
   --c-submitted: #38bdf8;   /* sky-400 */
   --c-submitted-bg: rgba(56, 189, 248, 0.12);
-  --c-draft: #94a3b8;
+  --c-draft: #aab6c8;      /* 4.6:1 trên --c-draft-bg; #94a3b8 chỉ 4.24:1 */
   --c-draft-bg: rgba(148, 163, 184, 0.15);
   --c-approved: #4ade80;
   --c-approved-bg: rgba(74, 222, 128, 0.12);

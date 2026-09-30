@@ -83,9 +83,16 @@ export const INGESTORS = {
 };
 
 for (const t of GENERIC_TYPES) {
+  // Phải truyền `uploadId` (và `zoneCode`) xuống. Trước đây chỉ `{ docType: t }` nên
+  // `opts.uploadId` luôn `undefined` ⇒ `generic_tabular.js:45` ghi
+  // `upload_id: null` cho **mọi** dòng. Hậu quả đo được ở `routes/upload.js:141`:
+  // nhánh lọc theo `upload_id` là code chết, nên 7 loại tài liệu này luôn rơi về
+  // chế độ "xem toàn dự án" — mở chi tiết một file lại thấy dòng của **file khác**
+  // trộn vào, không phải vì người dùng chọn sai mà vì hệ thống không biết dòng đó
+  // thuộc file nào.
   INGESTORS[t] = {
-    parse: (fp, opts) => parseGenericTabular(fp, opts.projectId, { docType: t }),
-    commit: (parsed, opts) => commitGenericTabular(parsed, opts.projectId, { docType: t }),
+    parse: (fp, opts) => parseGenericTabular(fp, opts.projectId, { docType: t, uploadId: opts.uploadId }),
+    commit: (parsed, opts) => commitGenericTabular(parsed, opts.projectId, { docType: t, uploadId: opts.uploadId }),
   };
 }
 
@@ -137,7 +144,17 @@ export async function findOrCreateZone(projectId, zoneCode, zoneName = null) {
   const db = getDb();
   const code = String(zoneCode).trim();
   if (!code) return null;
-  let zone = await db.prepare('SELECT id, code FROM zones WHERE project_id = ? AND code = ?').getAsync(projectId, code);
+  // Tra cứu **không phân biệt hoa thường**, và chỉ tạo khi không mơ hồ.
+  //
+  // `zones_project_code_idx` là unique nhưng **phân biệt hoa thường**, nên `b1` và
+  // `B1` cùng tạo được ⇒ cùng một khu vực vật lý thành hai zone. Hậu quả đo được ở
+  // `bim.js:50-53` (chính file đó ghi rõ): `GET /projects/:id/otd`
+  // (`routes/otd.js:66 GROUP BY zone_id, z.code`) ra hai dòng trùng `zone_code`, và
+  // truy vấn của `bim.js` (`UPPER(code) = UPPER(?) … count(*) = 1`) từ chối gắn model
+  // vào cả hai.
+  let zone = await db.prepare(
+    'SELECT id, code FROM zones WHERE project_id = ? AND UPPER(code) = UPPER(?)',
+  ).getAsync(projectId, code);
   if (!zone) {
     const r = await db.prepare('INSERT INTO zones (project_id, code, name_vi, name_en) VALUES (?, ?, ?, ?)').runAsync(projectId, code, zoneName || code, zoneName || code);
     zone = { id: Number(r.lastInsertRowid), code };

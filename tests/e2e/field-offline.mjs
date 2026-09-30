@@ -2,6 +2,7 @@
 // flush via resolve (CLIENT/SERVER winners), conflict transparency, ownership.
 // The browser outbox (localStorage) is thin over this endpoint — covered here.
 // Run: node tests/e2e/field-offline.mjs (spawns its own server, needs dev DB)
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 
 let failures = 0;
@@ -9,7 +10,7 @@ const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`);
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3116';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3116' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 
 const qids = [];
 try {

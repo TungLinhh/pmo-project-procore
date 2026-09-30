@@ -9,13 +9,33 @@ import { requireProjectAccess } from '../lib/project-access.js';
 import { getDb } from '../db/index.js';
 import { withAudit } from '../lib/with-audit.js';
 import { validateNewLink, LINK_TYPES } from '../lib/cpm.js';
+import { lockProject } from '../lib/baseline.js';
+import { errorBody } from '../lib/error-body.js';
+
+// Lỗi mang HTTP status + payload phụ (chu trình tìm được). Tương tự
+// nhưng khai ở đây vì bên đó không export.
+const httpError = (status, error, extra) => Object.assign(new Error(error), { status, extra });
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 router.use(permissionMiddleware);
 router.use('/projects/:id', requireProjectAccess());
 
-async function loadGraph(projectId) {
+// `client` là TUỜ CHỌN. Có thì đọc **bên trong** transaction của người gọi (project đã
+// được khoá bằng `SELECT … FOR UPDATE`), nên `validateNewLink` nhìn thấy đúng trạng
+// thái sẽ commit — xem lý do ở chỗ gọi trong `POST /`. Không có thì lùi về pool, cho
+// các call site chỉ cần snapshot (ví dụ `auto-chain` preview).
+async function loadGraph(projectId, client = null) {
+  if (client) {
+    const items = (await client.query(
+      'SELECT id FROM construction_schedule_items WHERE project_id = $1', [projectId],
+    )).rows;
+    const links = (await client.query(
+      'SELECT id, predecessor_id, successor_id, link_type, lag_days FROM schedule_links WHERE project_id = $1 ORDER BY id',
+      [projectId],
+    )).rows;
+    return { items, links };
+  }
   const db = getDb();
   const [items, links] = await Promise.all([
     db.prepare('SELECT id FROM construction_schedule_items WHERE project_id = ?').allAsync(projectId),
@@ -37,7 +57,7 @@ router.get('/projects/:id/schedule-links', async (req, res) => {
 });
 
 // POST /api/projects/:id/schedule-links {predecessor_id, successor_id, link_type?, lag_days?}
-router.post('/projects/:id/schedule-links', requireRole('admin', 'ceo', 'pm'), async (req, res) => {
+router.post('/projects/:id/schedule-links', requireRole('admin', 'ceo', 'pm', 'pmo'), async (req, res) => {
   const db = getDb();
   const { predecessor_id, successor_id, link_type = 'FS', lag_days = 0 } = req.body || {};
   const pred = Number(predecessor_id);
@@ -51,16 +71,26 @@ router.post('/projects/:id/schedule-links', requireRole('admin', 'ceo', 'pm'), a
     'SELECT id FROM construction_schedule_items WHERE project_id = ? AND id IN (?, ?)'
   ).allAsync(req.params.id, pred, succ);
   if (ends.length !== 2) return res.status(404).json({ error: 'Both items must exist in this project' });
-  const { items, links } = await loadGraph(req.params.id);
-  const v = validateNewLink(items, links, pred, succ, link_type, lag_days);
-  if (!v.ok) return res.status(422).json({ error: v.error, cycle: v.cycle || undefined });
   try {
     const row = await withAudit(req, {
-      action: 'CREATE', resourceType: 'schedule_link', resourceId: 0,
+      action: 'CREATE', resourceType: 'schedule_link',
       context: { project_id: Number(req.params.id) },
       after: { predecessor_id: pred, successor_id: succ, link_type, lag_days },
       note: `Link ${pred} -${link_type}+${lag_days}→ ${succ}`,
     }, async (client) => {
+      // Kiểm chu trình phải nằm **trong** transaction, sau khi đã khoá project.
+      //
+      // Trước đây nó chạy trên một ảnh chụp lấy trước `BEGIN`, nên hai request
+      // `POST /schedule-links` song song (A→B và B→A) cùng thấy một đồ thị không
+      // chu trình, cùng qua kiểm tra, cùng commit — và chu trình được ghi vào.
+      // Hậu quả **vĩnh viễn**: `lib/cpm.js:topoSort` ném `cyclic schedule graph` cho mọi
+      // lần tính CPM, nên `schedule-compress/preview` và `apply` của dự án đó trả 500
+      // tới khi ai đó xoá thủ công quan hệ. Index unique
+      // `schedule_links_pred_succ_uq` chỉ chặn cặp trùng, không chặn chu trình.
+      await lockProject(client, Number(req.params.id));
+      const { items, links } = await loadGraph(req.params.id, client);
+      const v = validateNewLink(items, links, pred, succ, link_type, lag_days);
+      if (!v.ok) throw httpError(422, v.error, { cycle: v.cycle || undefined });
       const r = await client.query(
         `INSERT INTO schedule_links (project_id, predecessor_id, successor_id, link_type, lag_days, created_by)
          VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
@@ -73,12 +103,15 @@ router.post('/projects/:id/schedule-links', requireRole('admin', 'ceo', 'pm'), a
     if (String(e.message).includes('schedule_links_pred_succ_uq')) {
       return res.status(409).json({ error: 'duplicate link' });
     }
-    res.status(500).json({ error: e.message });
+    // 422 của `validateNewLink` phải đi ra được mã của nó, kèm `cycle` để giao diện
+    // chỉ ra vòng. Trước đây mọi lỗi đều thành 500.
+    if (e.status) return res.status(e.status).json({ error: e.message, ...(e.extra || {}) });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 
 // DELETE /api/schedule-links/:id
-router.delete('/schedule-links/:id', requireRole('admin', 'ceo', 'pm'), async (req, res) => {
+router.delete('/schedule-links/:id', requireRole('admin', 'ceo', 'pm', 'pmo'), async (req, res) => {
   const db = getDb();
   const old = await db.prepare('SELECT * FROM schedule_links WHERE id = ?').getAsync(req.params.id);
   if (!old) return res.status(404).json({ error: 'Not found' });
@@ -96,7 +129,7 @@ router.delete('/schedule-links/:id', requireRole('admin', 'ceo', 'pm'), async (r
     });
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 
@@ -106,7 +139,7 @@ router.delete('/schedule-links/:id', requireRole('admin', 'ceo', 'pm'), async (r
 // DONE/locked items are SKIPPED as chain middles (they're anchors, not flow)
 // but remain valid endpoints when dates prove adjacency — kept simple: skip
 // items with progress_pct >= 1 entirely, report them as skipped.
-router.post('/projects/:id/schedule-links/auto-chain', requireRole('admin', 'ceo', 'pm'), async (req, res) => {
+router.post('/projects/:id/schedule-links/auto-chain', requireRole('admin', 'ceo', 'pm', 'pmo'), async (req, res) => {
   const db = getDb();
   const { confirm = false } = req.body || {};
   const items = await db.prepare(

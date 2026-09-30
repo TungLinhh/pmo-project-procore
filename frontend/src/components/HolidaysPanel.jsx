@@ -2,14 +2,14 @@
 // Tenant-global calendar (global VN rows are read-only seed data).
 // Mounted as the 'holidays' tab inside MasterDataList.
 import { useEffect, useState } from 'react';
-import { getToken } from '../api/index.js';
+import { request } from '../api/index.js';
 import { toast } from './Toast.jsx';
 import { ICON } from '../icons.jsx';
 import { useConfirm } from './Confirm.jsx';
-
-const authH = () => ({ Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' });
+import { t, th, useLang } from '../i18n/index.js';
 
 export default function HolidaysPanel() {
+  useLang(); // re-render table headers on VI/EN toggle
   const confirm = useConfirm();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -20,50 +20,48 @@ export default function HolidaysPanel() {
   async function load() {
     setLoading(true);
     try {
-      const d = await fetch('/api/holidays', { headers: { Authorization: `Bearer ${getToken()}` } }).then(r => r.json());
+      const d = await request('/holidays');
       setItems(Array.isArray(d) ? d : []);
     } catch { setItems([]); } finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
 
   async function create() {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { toast.error('Chọn ngày YYYY-MM-DD'); return; }
-    if (!name.trim()) { toast.error('Nhập tên ngày nghỉ'); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { toast.error(t('hol.date_ph')); return; }
+    if (!name.trim()) { toast.error(t('hol.name_ph2')); return; }
     setBusy(true);
     try {
-      const r = await fetch('/api/holidays', { method: 'POST', headers: authH(), body: JSON.stringify({ holiday_date: date, name: name.trim() }) }).then(r => r.json());
-      if (r.error) throw new Error(r.error);
+      await request('/holidays', { method: 'POST', body: { holiday_date: date, name: name.trim() } });
       toast.success(`Đã thêm ngày nghỉ ${date}`);
       setDate(''); setName('');
       load();
-    } catch (e) { toast.error('Thêm thất bại: ' + e.message); } finally { setBusy(false); }
+    } catch (e) { toast.error(t('hol.err_add') + e.message); } finally { setBusy(false); }
   }
 
   async function remove(id, label) {
-    const ok = await confirm({ title: 'Xóa ngày nghỉ', message: `Xóa "${label}"?`, confirmText: 'Xóa', confirmStyle: 'danger' });
+    const ok = await confirm({ title: t('hol.confirm_delete'), message: `Xóa "${label}"?`, confirmText: t('hol.btn_delete'), confirmStyle: 'danger' });
     if (!ok) return;
     setBusy(true);
     try {
-      const r = await fetch(`/api/holidays/${id}`, { method: 'DELETE', headers: authH() }).then(r => r.json());
-      if (r.error) throw new Error(r.error);
-      toast.success('Đã xóa ngày nghỉ');
+      await request(`/holidays/${id}`, { method: 'DELETE' });
+      toast.success(t('hol.toast_deleted'));
       setItems(items.filter(h => h.id !== id));
-    } catch (e) { toast.error('Xóa thất bại: ' + e.message); } finally { setBusy(false); }
+    } catch (e) { toast.error(t('hol.err_delete') + e.message); } finally { setBusy(false); }
   }
 
   return (
     <div>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
         <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ padding: 6 }} />
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="Tên ngày nghỉ (vd: Tết Dương lịch)" style={{ flex: 1, minWidth: 200, padding: 6 }} />
-        <button className="btn" onClick={create} disabled={busy}><ICON.plus size={13} />Thêm</button>
-        <button className="btn btn-secondary" onClick={load}><ICON.refresh size={12} />Refresh</button>
+        <input value={name} onChange={e => setName(e.target.value)} placeholder={t('hol.name_ph')} style={{ flex: 1, minWidth: 200, padding: 6 }} />
+        <button className="btn" onClick={create} disabled={busy}><ICON.plus size={13} />{t('hol.btn_add')}</button>
+        <button className="btn btn-secondary" onClick={load}><ICON.refresh size={12} />{t('g.refresh')}</button>
       </div>
       <div className="data-table"><div className="data-table-body">
-        {loading ? <div className="empty">Loading...</div> :
-         items.length === 0 ? <div className="empty">Chưa có ngày nghỉ.</div> :
+        {loading ? <div className="empty">{t('g.loading')}</div> :
+         items.length === 0 ? <div className="empty">{t('hol.empty')}</div> :
         <table>
-          <thead><tr><th>Ngày</th><th>Tên</th><th>Phạm vi</th><th></th></tr></thead>
+          <thead><tr><th>{th("Ngày")}</th><th>{th("Tên")}</th><th>{th("Phạm vi")}</th><th></th></tr></thead>
           <tbody>
             {items.map(h => (
               <tr key={h.id}>
@@ -78,9 +76,7 @@ export default function HolidaysPanel() {
           </tbody>
         </table>}
       </div></div>
-      <p className="empty" style={{ marginTop: 12, fontSize: 11 }}>
-        Ngày global (lịch VN) chỉ đọc — do seed quản lý. Ngày tenant tự thêm sẽ tự động gộp vào tính nén tiến độ.
-      </p>
+      <p className="empty" style={{ marginTop: 12, fontSize: 11 }}>{t('hol.global_readonly2')}</p>
     </div>
   );
 }

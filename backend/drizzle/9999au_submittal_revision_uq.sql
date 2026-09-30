@@ -1,0 +1,28 @@
+-- Chặn hai bản sửa của cùng một bản gốc mang cùng số thứ tự.
+--
+-- `routes/material-submittals.js` đọc `revision_number` của bản gốc **ngoài**
+-- transaction rồi `+1`:
+--
+--   const rev = parent_submittal_id
+--     ? (await db.prepare('SELECT revision_number FROM material_submittals WHERE id = ? AND project_id = ?')…).revision_number
+--     : 0;
+--   const revision = rev === null ? 0 : rev + 1;
+--
+-- Hai request song song cùng đọc `0` rồi cùng ghi `1`. Đo được bằng
+-- `tests/e2e/concurrency.mjs`: 6 request đồng thời sinh **6 bản sửa số 1**.
+-- Trước khi có index này, việc tự cấp số thứ tự là đọc-rồi-ghi không khoá, tức
+-- lỗi chỉ chờ hai người bấm nhanh là xảy ra.
+--
+-- Index unique ở đây là **lưới an toàn cuối**: nó bắt được cả ghi từ nơi khác
+-- (seeder, SQL tay, script nạp) chứ không chỉ từ route HTTP. Route cũng được sửa
+-- để khoá bản gốc bằng `SELECT … FOR UPDATE` trong transaction, nhờ đó request
+-- thứ hai chờ rồi đọc lại số mới nhận đúng `+1` thay vì phải dựa vào index.
+--
+-- Dòng `parent_submittal_id IS NULL` (bản gốc, `revision_number = 0`) không bị ảnh
+-- hưởng: Postgres coi NULL là khác nhau trong unique index.
+--
+-- Trước khi tạo index, dòng trùng đã được kiểm: hiện có 0 nhóm
+-- `(parent_submittal_id, revision_number)` bị trùng, nên index tạo được ngay mà
+-- không phải dọn dữ liệu.
+CREATE UNIQUE INDEX IF NOT EXISTS material_submittals_parent_revision_uq
+  ON material_submittals (parent_submittal_id, revision_number);

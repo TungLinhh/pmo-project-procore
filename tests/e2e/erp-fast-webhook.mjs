@@ -3,6 +3,7 @@
 // retry-then-log on dead endpoint, event fan-out on payment approval.
 // Self-cleaning (profiles + logs removed). No real network beyond localhost.
 // Run: node tests/e2e/erp-fast-webhook.mjs (spawns its own server, needs dev DB)
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createHmac } from 'node:crypto';
@@ -12,7 +13,7 @@ const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`);
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3122';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3122', TEST_FAST_SECRET: 'fast-test-token', TEST_WH_SECRET: 'wh-test-secret' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 
 // Local stubs: FAST API (Bearer check) + webhook receiver (HMAC verify).
 const seen = { fast: [], webhooks: [] };

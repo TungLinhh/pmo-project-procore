@@ -1,6 +1,10 @@
 // Test Detail navigation: A→A, B→B
+// P5-3: this script used to drive the removed English headings and a
+// `.filter-bar select` for the project. The app now renders Vietnamese pillar
+// headings, a ProjectPicker <input> combobox, and `?project=` (not
+// `?project_id=`) in the deep links. Kept honest against the current UI.
 import { chromium } from 'playwright';
-const BASE = 'http://localhost:3000';
+const BASE = process.env.BASE_URL || 'http://localhost:3000';
 const browser = await chromium.launch({ headless: true });
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 const page = await ctx.newPage();
@@ -26,37 +30,34 @@ const projects = await page.evaluate(async () => {
 });
 console.log(`Projects available: ${projects.length}`);
 
+const PILLARS = ['Tiến độ thi công', 'Bản vẽ shop', 'Vật tư', 'Thanh toán'];
+
 for (const proj of projects) {
-  // Select project
-  await page.evaluate((pid) => {
-    const sel = document.querySelector('.filter-bar select');
-    if (sel) { sel.value = String(pid); sel.dispatchEvent(new Event('change', { bubbles: true })); }
-  }, proj.id);
-  await page.waitForTimeout(1500);
-  
+  // Select project through the ProjectPicker combobox, not a <select>.
+  await page.goto(`${BASE}/hq?project=${proj.id}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.pillar-card', { timeout: 10000 });
+  await page.waitForTimeout(1200);
+  const shownCode = await page.locator('.layer-l0 strong').first().textContent().catch(() => null);
+  if (shownCode && shownCode.trim() !== proj.code) {
+    errors.push(`MISMATCH: picker shows ${shownCode.trim()} for project ${proj.id} (${proj.code})`);
+  }
+
   console.log(`\nProject: ${proj.code} (id=${proj.id})`);
-  
-  // Click each pillar card
-  const pillars = ['Construction Progress', 'Shopdrawing', 'Material', 'Payment'];
-  for (const pname of pillars) {
+
+  for (const pname of PILLARS) {
     const card = page.locator(`.pillar-card:has(h3:has-text("${pname}"))`).first();
+    const count = await card.count();
+    if (count === 0) { errors.push(`MISSING pillar card: ${pname}`); continue; }
     await card.click();
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(1200);
     const url = page.url();
-    const urlProjectId = new URL(url).searchParams.get('project_id');
+    const urlProjectId = new URL(url).searchParams.get('project');
     const ok = urlProjectId === String(proj.id);
-    console.log(`  ${pname}: URL=${url.replace(BASE, '')}, project_id=${urlProjectId}, match=${ok}`);
+    console.log(`  ${pname}: URL=${url.replace(BASE, '')}, project=${urlProjectId}, match=${ok}`);
     if (!ok) errors.push(`MISMATCH: ${pname} for project ${proj.id} got ${urlProjectId}`);
-    // Back to control center
-    await page.goto(`${BASE}/hq`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${BASE}/hq?project=${proj.id}`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.pillar-card', { timeout: 5000 });
-    await page.waitForTimeout(800);
-    // Re-select project
-    await page.evaluate((pid) => {
-      const sel = document.querySelector('.filter-bar select');
-      if (sel) { sel.value = String(pid); sel.dispatchEvent(new Event('change', { bubbles: true })); }
-    }, proj.id);
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(600);
   }
 }
 
@@ -66,3 +67,4 @@ else errors.forEach(e => console.log('  - ' + e));
 
 await browser.close();
 console.log('\n=== DONE ===');
+process.exit(errors.length ? 1 : 0);

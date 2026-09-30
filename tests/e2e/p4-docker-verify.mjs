@@ -4,14 +4,20 @@
 // Requires: backend running on localhost:3000, PG on 127.0.0.1:5433
 
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const BASE = 'http://localhost:3000';
-const PSQL = process.env.PSQL || '/home/linuxbrew/.linuxbrew/bin/psql';
-const PG = { host: '127.0.0.1', port: 5433, user: 'pmo_user', pass: 'pmo_dev_pwd', db: 'pmo' };
+const BASE = process.env.BASE_URL || 'http://localhost:3000';
+const PSQL = process.env.PSQL_BIN || process.env.PSQL || 'psql';
+const PG = {
+  host: process.env.PGHOST || '127.0.0.1',
+  port: Number(process.env.PGPORT || 5433),
+  user: process.env.PGUSER || 'pmo_user',
+  pass: process.env.PGPASSWORD || 'pmo_dev_pwd',
+  db: process.env.PGDATABASE || 'pmo',
+};
 
 let pass = 0, fail = 0;
 function ok(label, cond) {
@@ -140,6 +146,33 @@ ok('DB has shop_drawings', shopCount !== '__error' && parseInt(shopCount) > 0);
 console.log('\n=== 12. Frontend ===');
 const frontendExists = existsSync(join(ROOT, 'frontend', 'dist', 'index.html'));
 ok('frontend dist exists', frontendExists);
+
+// ===== Test 13: lệnh HEALTHCHECK của Dockerfile chạy thật =====
+//
+// Vì sao: `p2-01-docker-build` chỉ đọc **chuỗi** `HEALTHCHECK … CMD node -e` trong
+// Dockerfile. Một lệnh sai cú pháp, sai URL, hay gọi nhị phân không có trong image vẫn xanh.
+// Ở đây server đang sống nên chạy **đúng lệnh đó** và kiểm cả hai chiều: cổng mở ⇒ exit 0,
+// cổng đóng ⇒ exit khác 0. Lệnh `wget`/`curl` sẽ hỏng ở container (image không cài) — đó là
+// lý do Dockerfile ghi "node is always present".
+console.log('\n=== 13. Dockerfile HEALTHCHECK (thực thi thật) ===');
+const dockerfile = readFileSync(join(ROOT, 'Dockerfile'), 'utf8');
+const hc = dockerfile.match(/HEALTHCHECK[\s\S]*?CMD\s+(.+)/);
+ok('Dockerfile có HEALTHCHECK với CMD', !!hc);
+if (hc) {
+  const cmd = hc[1].replace(/\\\s*$/, '').trim();
+  // Không gọi được `wget`/`curl`: image `node:22-slim` cố ý không cài, nên lệnh đó sẽ hỏng
+  // trong container dù chạy được trên máy dev.
+  ok('HEALTHCHECK không dùng wget/curl (image không cài)', !/^\s*(wget|curl)\b/.test(cmd));
+  let code = null;
+  try { execFileSync('sh', ['-c', cmd], { stdio: 'ignore', timeout: 15000 }); code = 0; }
+  catch (e) { code = e.status ?? 1; }
+  ok(`HEALTHCHECK trả 0 khi server khoẻ (exit ${code})`, code === 0);
+  // Cổng đóng: cùng lệnh đó phải báo bệnh, nếu không thì healthcheck là vô nghĩa.
+  let downCode = null;
+  try { execFileSync('sh', ['-c', cmd.replace(/localhost:\d+/, 'localhost:9')], { stdio: 'ignore', timeout: 15000 }); downCode = 0; }
+  catch (e) { downCode = e.status ?? 1; }
+  ok(`HEALTHCHECK báo bệnh khi server chết (exit ${downCode})`, downCode !== 0);
+}
 
 // ===== Summary =====
 console.log('\n========================================');

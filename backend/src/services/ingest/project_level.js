@@ -1,7 +1,7 @@
 // Ingest a "tổng thể" file (multi-zone summary). PG-only. Mô hình A wizard.
 import { getDb } from '../../db/index.js';
 import { recordFailure } from './failures.js';
-import { readSheet, toText, toInt, toFloat, toDate, findDataStart } from '../../lib/excel.js';
+import { readSheet, readWorkbook, toText, toInt, toFloat, toDate, findDataStart } from '../../lib/excel.js';
 import { findZoneByName } from '../../lib/zone_matcher.js';
 import { findOrCreateZone } from './index.js';
 
@@ -9,6 +9,16 @@ const HEADER_KEYWORDS = ['stt', 'tt', 'hạng mục', 'nội dung', 'tiến đ�
 
 function parseSheetRows(rows, dataStart, docType) {
   const out = [];
+  // `||` swallows a legitimate 0 % and falls through to a *different* column,
+  // so a row reporting 0 % was stored with another column's value while the
+  // report still counted it as ok. First non-null wins, 0 included.
+  const firstNumber = (...values) => {
+    for (const value of values) {
+      const n = toFloat(value);
+      if (n != null) return n;
+    }
+    return null;
+  };
   for (let r = dataStart; r < rows.length; r++) {
     const row = rows[r] || [];
     if (docType === 'shop_drawing') {
@@ -16,13 +26,13 @@ function parseSheetRows(rows, dataStart, docType) {
       const name = toText(row[6]) || toText(row[2]);
       if (!code && !name) continue;
       if (code && /^[0-9.]+$/.test(code)) continue;
-      out.push({ drawing_code: code, name_vi: name, progress_pct: toFloat(row[7]) || toFloat(row[3]) });
+      out.push({ drawing_code: code, name_vi: name, progress_pct: firstNumber(row[7], row[3]) });
     } else if (docType === 'material_supply') {
       const code = toText(row[5]) || toText(row[1]);
       const name = toText(row[6]) || toText(row[2]);
       if (!code && !name) continue;
       if (code && /^[0-9.]+$/.test(code)) continue;
-      out.push({ material_code: code, name_vi: name, progress_pct: toFloat(row[7]) || toFloat(row[3]), request_date_1: toDate(row[8]) || toDate(row[4]) });
+      out.push({ material_code: code, name_vi: name, progress_pct: firstNumber(row[7], row[3]), request_date_1: toDate(row[8]) || toDate(row[4]) });
     } else {
       // construction_schedule
       const stt = toText(row[3]) || toText(row[0]);
@@ -35,7 +45,7 @@ function parseSheetRows(rows, dataStart, docType) {
       out.push({
         ordinal: romanMatch ? romanMap[romanMatch[1]] : toInt(stt),
         name_vi: name || stt,
-        progress_pct: toFloat(row[9]) || toFloat(row[8]) || toFloat(row[7]) || toFloat(row[2]),
+        progress_pct: firstNumber(row[9], row[8], row[7], row[2]),
         plan_start_date: toDate(row[6]) || toDate(row[3]),
         plan_end_date: toDate(row[10]) || toDate(row[7]),
       });
@@ -46,8 +56,7 @@ function parseSheetRows(rows, dataStart, docType) {
 
 export async function parse(filePath, projectId, options = {}) {
   const db = getDb();
-  const XLSX = (await import('xlsx')).default;
-  const wb = XLSX.readFile(filePath, { cellDates: true });
+  const wb = readWorkbook(filePath);
   const zones = await db.prepare('SELECT id, code FROM zones WHERE project_id = ?').allAsync(projectId);
   const sheets = [];
   for (const sheetName of wb.SheetNames) {
@@ -86,14 +95,20 @@ export async function commit(parsed, projectId, opts = {}) {
             { project_id: projectId, zone_id: sheet.zone_id, source_sheet: sheet.sheet, upload_id: uploadId, drawing_code: row.drawing_code, name_vi: row.name_vi, progress_pct: row.progress_pct }
           );
         } else if (docType === 'material_supply') {
+          // Không ghi đè `progress_pct` khi dòng đã tồn tại — xem `material_supply.js`
+          // để biết vì sao (null sẽ xoá sạch tiến độ nhập trong ứng dụng).
           await db.upsert('materials',
-            { conflictCols: ['project_id', 'zone_id', 'material_code'] },
+            { conflictCols: ['project_id', 'zone_id', 'material_code'], setCols: ['zone_id', 'source_sheet', 'upload_id', 'name_vi', 'request_date_1'] },
             { project_id: projectId, zone_id: sheet.zone_id, source_sheet: sheet.sheet, upload_id: uploadId, material_code: row.material_code, name_vi: row.name_vi, progress_pct: row.progress_pct, request_date_1: row.request_date_1 }
           );
         } else {
+          // `setCols` tường minh (tiền lệ `shop_drawing.js:213`). Ở đây `row`
+          // không có `status` nên vốn đã không ghi đè cột vòng đời — chốt lại cho
+          // chắc, và để danh sách cột đọc được ý nghĩa.
           await db.upsert('construction_schedule_items',
-            { conflictCols: ['project_id', 'zone_id', 'source_sheet', 'ordinal'] },
-            { project_id: projectId, zone_id: sheet.zone_id, source_sheet: sheet.sheet, upload_id: uploadId, ordinal: row.ordinal, name_vi: row.name_vi, progress_pct: row.progress_pct, plan_start_date: row.plan_start_date, plan_end_date: row.plan_end_date }
+            { conflictCols: ['project_id', 'zone_id', 'source_sheet', 'level_roman', 'level_arabic', 'sublevel', 'ordinal'],
+              setCols: ['zone_id', 'source_sheet', 'upload_id', 'name_vi', 'progress_pct', 'plan_start_date', 'plan_end_date'] },
+            { project_id: projectId, zone_id: sheet.zone_id, source_sheet: sheet.sheet, upload_id: uploadId, level_roman: '', level_arabic: 0, sublevel: 0, ordinal: row.ordinal, name_vi: row.name_vi, progress_pct: row.progress_pct, plan_start_date: row.plan_start_date, plan_end_date: row.plan_end_date }
           );
         }
         report.ok++;

@@ -1,6 +1,7 @@
 // P2-13: jobs escalate locked to admin/ceo (+NULL deadlines never match),
 // master-data writes validated per resource with server-side tenant. Real PG + server.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p2-jobs-masterdata.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 
 let failures = 0;
@@ -8,7 +9,7 @@ const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`);
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3107';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3107' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 
 try {
   const loginAs = async (email) => fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: 'admin123' }) }).then(r => r.json()).then(j => j.token);
@@ -31,7 +32,7 @@ try {
   const unk = await post(adminT, '/api/master-data/nope', { name: 'x' });
   ok(unk.s === 404, 'unknown resource → 404');
   const v = await post(adminT, '/api/master-data/vendors', { code: `V-${Date.now()}`, name: 'P2-13 Vendor', tenant_id: 999 });
-  ok(v.s === 200 && Number(v.j.tenant_id) === 1, `vendor created, tenant forced from user (got ${v.j.tenant_id})`);
+  ok(v.s === 201 && Number(v.j.tenant_id) === 1, `vendor created, tenant forced from user (got ${v.j.tenant_id})`);
   const w = await post(adminT, '/api/master-data/workers', { code: 'W1' });
   ok(w.s === 400 && /requires: full_name/.test(w.j.error || ''), 'worker without full_name → 400');
 

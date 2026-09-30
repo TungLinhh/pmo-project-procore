@@ -2,7 +2,7 @@
 // PG-only. Mô hình A wizard: parse() returns rows, commit() inserts them.
 import { getDb } from '../../db/index.js';
 import { recordFailure } from './failures.js';
-import { readSheet, toText, toInt, findDataStart } from '../../lib/excel.js';
+import { readSheet, readWorkbook, toText, toInt, findDataStart } from '../../lib/excel.js';
 
 const HEADER_KEYWORDS = ['stt', 'tt', 'no', 'no.'];
 
@@ -18,8 +18,7 @@ function parseRow(row) {
 }
 
 export async function parse(filePath, projectId) {
-  const XLSX = (await import('xlsx')).default;
-  const wb = XLSX.readFile(filePath, { cellDates: true });
+  const wb = readWorkbook(filePath);
   const sheets = [];
   for (const sheetName of wb.SheetNames) {
     const rows = readSheet(filePath, sheetName);
@@ -41,8 +40,11 @@ export async function commit(parsed, projectId, tenantId) {
   for (const sheet of parsed.sheets) {
     for (const [idx, row] of sheet.rows.entries()) {
       try {
+        // `setCols` tường minh: chỉ cập nhật cột thực sự thuộc sheet. `status` là
+        // cột vòng đời (xoá mềm đặt `INACTIVE` ở `routes/master-data.js`) nên không
+        // được hồi sinh; `is_internal_team` được đặt tay trong ứng dụng.
         await db.upsert('subcontractors',
-          { conflictCols: ['tenant_id', 'name'] },
+          { conflictCols: ['tenant_id', 'name'], setCols: ['capability_summary'] },
           { tenant_id: tenantId, name: row.name, capability_summary: row.capability_summary, status: row.status, is_internal_team: row.is_internal_team }
         );
         report.ok++;

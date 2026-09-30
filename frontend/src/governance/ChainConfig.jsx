@@ -1,22 +1,19 @@
 // ChainConfig — cấu hình chain duyệt theo bộ phận + gán dept cho users.
 // Chains: 1 row per (department|default, resource_type). Xóa = về legacy.
 import { useEffect, useState } from 'react';
-import { getToken } from '../api/index.js';
+import { request } from '../api/index.js';
 import { toast } from '../components/Toast.jsx';
+import { useConfirm } from '../components/Confirm.jsx';
 import { ICON } from '../icons.jsx';
+import { t, th, useLang } from '../i18n/index.js';
 
 const RESOURCES = ['shop_drawing', 'material_submittal'];
 const ROLES = ['PM', 'PMO', 'SITE', 'PROCUREMENT', 'ACCOUNTING', 'ADMIN', 'CEO'];
-const api = (path, opts = {}) => fetch('/api' + path, {
-  ...opts,
-  headers: { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json', ...(opts.headers || {}) },
-}).then(async (r) => {
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-  return d;
-});
+const api = request;
 
 export default function ChainConfig() {
+  useLang(); // re-render table headers on VI/EN toggle
+  const confirm = useConfirm();
   const [chains, setChains] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [users, setUsers] = useState([]);
@@ -33,7 +30,7 @@ export default function ChainConfig() {
       setChains(Array.isArray(c) ? c : []);
       setDepartments(Array.isArray(d) ? d : []);
       setUsers(Array.isArray(u) ? u : []);
-    } catch (e) { toast.error('Lỗi tải: ' + e.message); }
+    } catch (e) { toast.error(t('cc.err_load') + e.message); }
   }
   useEffect(() => { load(); }, []);
 
@@ -56,15 +53,20 @@ export default function ChainConfig() {
           resource_type: form.resource_type, levels,
         }),
       });
-      toast.success('Đã lưu chain');
+      toast.success(t('cc.toast_saved'));
       load();
-    } catch (e) { toast.error('Lỗi: ' + e.message); } finally { setBusy(false); }
+    } catch (e) { toast.error(t('cc.err_generic') + e.message); } finally { setBusy(false); }
   }
 
   async function remove(id) {
-    if (!window.confirm('Xóa chain này (về legacy single-step)?')) return;
-    try { await api('/approval-chains/' + id, { method: 'DELETE' }); toast.success('Đã xóa'); load(); }
-    catch (e) { toast.error('Lỗi: ' + e.message); }
+    const ok = await confirm({
+      title: t('cc.confirm_delete_title'),
+      message: t('cc.confirm_delete_msg'),
+      confirmText: t('cc.btn_delete'), confirmStyle: 'danger',
+    });
+    if (!ok) return;
+    try { await api('/approval-chains/' + id, { method: 'DELETE' }); toast.success(t('cc.toast_deleted')); load(); }
+    catch (e) { toast.error(t('cc.err_generic') + e.message); }
   }
 
   async function setUserDept(userId, departmentId) {
@@ -74,7 +76,7 @@ export default function ChainConfig() {
         body: JSON.stringify({ department_id: departmentId ? Number(departmentId) : null }),
       });
       setUsers(us => us.map(u => (u.id === userId ? { ...u, department_id: departmentId ? Number(departmentId) : null } : u)));
-    } catch (e) { toast.error('Lỗi: ' + e.message); }
+    } catch (e) { toast.error(t('cc.err_generic') + e.message); }
   }
 
   // Department tree (Wave D2): depth from parent_id map, cycle-guarded locally.
@@ -99,32 +101,32 @@ export default function ChainConfig() {
         method: 'PATCH',
         body: JSON.stringify({ parent_id: parentId ? Number(parentId) : null }),
       });
-      toast.success('Đã cập nhật cơ cấu');
+      toast.success(t('cc.toast_updated'));
       load();
-    } catch (e) { toast.error('Lỗi: ' + e.message); }
+    } catch (e) { toast.error(t('cc.err_generic') + e.message); }
   }
 
   return (
     <div>
       <div className="page-header">
         <div>
-          <h1>Cấu hình duyệt</h1>
-          <div className="meta">Chain theo bộ phận · tối đa 5 levels · không chain = duyệt 1 bước</div>
+          <h1>{t('cc.h1')}</h1>
+          <div className="meta">{t('cc.subtitle')}</div>
         </div>
       </div>
 
       <div className="card" style={{ padding: 16, marginBottom: 16 }}>
-        <h2 style={{ fontSize: 13, margin: '0 0 10px' }}>Chains hiện tại</h2>
-        {chains.length === 0 ? <div className="empty">Chưa có chain — đang chạy legacy single-step</div> : (
+        <h2 style={{ fontSize: 13, margin: '0 0 10px' }}>{t('cc.sec_chains')}</h2>
+        {chains.length === 0 ? <div className="empty">{t('cc.empty_chains')}</div> : (
           <table>
-            <thead><tr><th>Resource</th><th>Bộ phận</th><th>Levels</th><th></th></tr></thead>
+            <thead><tr><th>{th("Tài nguyên")}</th><th>{th("Bộ phận")}</th><th>{th("Cấp")}</th><th></th></tr></thead>
             <tbody>
               {chains.map(c => (
                 <tr key={c.id}>
                   <td><code>{c.resource_type}</code></td>
                   <td>{c.department_code ? `${c.department_code} · ${c.department_name}` : <i>default</i>}</td>
                   <td>{(c.levels || []).map(l => `L${l.level}:${l.role}`).join(' → ')}</td>
-                  <td><button className="btn btn-secondary" onClick={() => remove(c.id)}>Xóa</button></td>
+                  <td><button className="btn btn-secondary" onClick={() => remove(c.id)}>{t('cc.btn_delete')}</button></td>
                 </tr>
               ))}
             </tbody>
@@ -133,18 +135,18 @@ export default function ChainConfig() {
       </div>
 
       <div className="card" style={{ padding: 16, marginBottom: 16 }}>
-        <h2 style={{ fontSize: 13, margin: '0 0 10px' }}>Thêm / sửa chain</h2>
+        <h2 style={{ fontSize: 13, margin: '0 0 10px' }}>{t('cc.btn_add_chain')}</h2>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
           <label>
-            <div style={{ fontSize: 11, color: 'var(--c-text-2)' }}>Resource</div>
+            <div style={{ fontSize: 11, color: 'var(--c-text-2)' }}>{t('g.resource')}</div>
             <select value={form.resource_type} onChange={e => setForm({ ...form, resource_type: e.target.value })}>
               {RESOURCES.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
           </label>
           <label>
-            <div style={{ fontSize: 11, color: 'var(--c-text-2)' }}>Bộ phận (trống = default)</div>
+            <div style={{ fontSize: 11, color: 'var(--c-text-2)' }}>{t('cc.lbl_dept')}</div>
             <select value={form.department_id} onChange={e => setForm({ ...form, department_id: e.target.value })}>
-              <option value="">default toàn tenant</option>
+              <option value="">{t('cc.lbl_default_tenant')}</option>
               {departments.map(d => <option key={d.id} value={d.id}>{deptLabel(d)}</option>)}
             </select>
           </label>
@@ -155,28 +157,28 @@ export default function ChainConfig() {
             <select value={lv.role} onChange={e => setLevel(i, 'role', e.target.value)}>
               {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
-            <input placeholder="Nhãn (vd: Trưởng BP)" value={lv.label} onChange={e => setLevel(i, 'label', e.target.value)} style={{ flex: 1 }} />
+            <input placeholder={t('cc.lbl_step_label')} value={lv.label} onChange={e => setLevel(i, 'label', e.target.value)} style={{ flex: 1 }} />
           </div>
         ))}
         <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
           <button className="btn btn-secondary" onClick={addLevel} disabled={form.levels.length >= 5}>+ Level</button>
           <button className="btn btn-secondary" onClick={dropLevel} disabled={form.levels.length <= 1}>− Level</button>
-          <button className="btn" onClick={save} disabled={busy}><ICON.check size={12} />{busy ? '...' : 'Lưu chain'}</button>
+          <button className="btn" onClick={save} disabled={busy}><ICON.check size={12} />{busy ? '...' : t('cc.btn_save_chain')}</button>
         </div>
       </div>
 
       <div className="card" style={{ padding: 16, marginBottom: 16 }}>
-        <h2 style={{ fontSize: 13, margin: '0 0 10px' }}>Cơ cấu bộ phận (cây — chain kế thừa từ dưới lên)</h2>
-        {departments.length === 0 ? <div className="empty">Chưa có bộ phận</div> : (
+        <h2 style={{ fontSize: 13, margin: '0 0 10px' }}>{t('cc.sec_tree')}</h2>
+        {departments.length === 0 ? <div className="empty">{t('cc.empty_depts')}</div> : (
           <table>
-            <thead><tr><th>Bộ phận</th><th>Thuộc</th></tr></thead>
+            <thead><tr><th>{th("Bộ phận")}</th><th>{th("Thuộc")}</th></tr></thead>
             <tbody>
               {departments.map(d => (
                 <tr key={d.id}>
                   <td>{deptLabel(d)}</td>
                   <td>
                     <select value={d.parent_id || ''} onChange={e => setDeptParent(d.id, e.target.value)}>
-                      <option value="">— gốc —</option>
+                      <option value="">{t('cc.t_root')}</option>
                       {departments.filter(x => x.id !== d.id).map(x => <option key={x.id} value={x.id}>{x.code}</option>)}
                     </select>
                   </td>
@@ -188,10 +190,10 @@ export default function ChainConfig() {
       </div>
 
       <div className="card" style={{ padding: 16 }}>
-        <h2 style={{ fontSize: 13, margin: '0 0 10px' }}>Gán bộ phận cho users</h2>
-        {users.length === 0 ? <div className="empty">Chỉ admin/CEO thấy mục này</div> : (
+        <h2 style={{ fontSize: 13, margin: '0 0 10px' }}>{t('cc.sec_assign')}</h2>
+        {users.length === 0 ? <div className="empty">{t('cc.admin_only')}</div> : (
           <table>
-            <thead><tr><th>User</th><th>Role</th><th>Bộ phận</th></tr></thead>
+            <thead><tr><th>{th("Người dùng")}</th><th>{th("Vai trò")}</th><th>{th("Bộ phận")}</th></tr></thead>
             <tbody>
               {users.map(u => (
                 <tr key={u.id}>

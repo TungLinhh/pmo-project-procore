@@ -2,15 +2,20 @@
 // apply writes, double-apply 409, rollback restores, infeasible preview.
 // Scratch HBG project, fully cleaned in finally (goldens never see it).
 // Run: node tests/e2e/schedule-compress.mjs (spawns its own server, needs dev DB)
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
+import { cleanupProjectsOnExit } from './lib-cleanup.mjs';
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3112';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3112' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 
+
+// Dọn dự án thử nghiệm nếu bài dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupProjectsOnExit(['CMP-%', 'SCHED-ST-%'], { label: 'schedule-compress' });
 const todayPlus = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
 let scratchPid = null;
 try {

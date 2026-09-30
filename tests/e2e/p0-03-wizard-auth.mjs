@@ -1,14 +1,19 @@
 // P0-03: wizard endpoints require auth; authed demo login still passes auth layer.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p0-03-wizard-auth.mjs
 import { execSync, spawn } from 'node:child_process';
+import { psql, waitForServer } from './lib.mjs';
+import { cleanupProjectsOnExit } from './lib-cleanup.mjs';
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const BASE = 'http://localhost:3102';
 const env = { ...process.env, DATABASE_URL: process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo', PORT: '3102' };
 
+
+// Dọn dự án thử nghiệm nếu bài dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupProjectsOnExit(['WIZ-AUTH-%'], { label: 'p0-03-wizard-auth' });
 const srv = spawn('node', ['backend/src/index.js'], { env, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 const dead = srv.exitCode !== null && srv.exitCode !== undefined;
 ok(!dead, 'server booted');
 
@@ -43,6 +48,10 @@ try {
   for (const [m, p, b] of checks) {
     const r = await fetch(BASE + p, { method: m, headers: H, body: b ? JSON.stringify(b) : undefined });
     ok(r.status !== 401, `authed ${m} ${p} passes auth (got ${r.status})`);
+    if (m === 'GET' && p === '/api/upload/doc-types') {
+      const body = await r.json().catch(() => null);
+      ok(r.status === 200 && Array.isArray(body) && body.some((type) => type.id === 'shop_drawing'), `authed GET doc-types returns the wizard catalog (got ${r.status})`);
+    }
   }
   // Authed project create with unique code → 201 (proves legit flow still open), then zones 409 dup proves zone path authed
   const code = `WIZ-AUTH-${Date.now()}`;
@@ -54,6 +63,13 @@ try {
     ok([201, 409].includes(zr.status), `authed POST /zones passes auth (got ${zr.status})`);
   } else ok(false, 'skip zone check: project create failed');
 } finally {
+  // Dự án thử phải được xoá. Bài này tạo `WIZ-AUTH-<timestamp>` rồi bỏ lại, và dự án
+  // đó **làm đỏ một golden test khác**: `p5-golden.mjs` kiểm tập dự án ACTIVE của
+  // tenant demo đúng bằng `BTE-WP4-HBC,HBG-LVK-BCTH,HBG-MCR` (mục tiêu của nó là
+  // "không có dữ liệu rác của test lọt vào demo"). `AGENTS.md` yêu cầu mọi bài kiểm
+  // tự dọn dòng của mình.
+  try { psql(`DELETE FROM zones WHERE project_id IN (SELECT id FROM projects WHERE code LIKE 'WIZ-AUTH-%')`); } catch {}
+  try { psql(`DELETE FROM projects WHERE code LIKE 'WIZ-AUTH-%'`); } catch {}
   srv.kill('SIGTERM');
   await new Promise(r => setTimeout(r, 1000));
 }

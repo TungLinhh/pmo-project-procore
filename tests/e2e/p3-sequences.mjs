@@ -4,7 +4,9 @@
 // 2. explicit-id import (id=9999) + re-init → next auto id is 10000.
 // 3. tables without `id` insert fine with no RETURNING workaround.
 // Run: node tests/e2e/p3-sequences.mjs
+import { adminPsql } from '../tools/env.mjs';
 import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
@@ -15,17 +17,17 @@ const PG = {
   password: process.env.PGPASSWORD || 'pmo_dev_pwd',
 };
 const DBNAME = 'pmo_seqtest';
+const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const FRESH_URL = `postgresql://${PG.user}:${PG.password}@${PG.host}:${PG.port}/${DBNAME}`;
 const PSQL = `PGPASSWORD=${PG.password} psql -h ${PG.host} -p ${PG.port} -U ${PG.user}`;
 const psqlDb = (db, sql) => execSync(`${PSQL} -d ${db} -t -A -c "${sql.replace(/"/g, '\\"')}"`, { encoding: 'utf8' }).trim();
-const SUPERPSQL = `psql -h /tmp -p ${PG.port} -U vutun`;
 const superpsql = (sql) => execSync(`${SUPERPSQL} -d postgres -c "${sql}"`, { encoding: 'utf8' });
 const nodeEval = (js) => execSync(`node --input-type=module -e "${js.replace(/"/g, '\\"')}"`,
-  { encoding: 'utf8', cwd: '/home/vutun/pmo_project', env: { ...process.env, DATABASE_URL: FRESH_URL }, timeout: 60000 });
+  { encoding: 'utf8', cwd: ROOT, env: { ...process.env, DATABASE_URL: FRESH_URL }, timeout: 60000 });
 
-superpsql(`DROP DATABASE IF EXISTS ${DBNAME};`);
-superpsql(`CREATE DATABASE ${DBNAME} OWNER ${PG.user};`);
-execSync('node backend/src/db/init.js', { encoding: 'utf8', cwd: '/home/vutun/pmo_project', env: { ...process.env, DATABASE_URL: FRESH_URL }, timeout: 180000 });
+adminPsql(`DROP DATABASE IF EXISTS ${DBNAME};`);
+adminPsql(`CREATE DATABASE ${DBNAME} OWNER ${PG.user};`);
+execSync('node backend/src/db/init.js', { encoding: 'utf8', cwd: ROOT, env: { ...process.env, DATABASE_URL: FRESH_URL }, timeout: 180000 });
 
 // 1. concurrent inserts, no setval guard
 const out = nodeEval(`
@@ -44,14 +46,18 @@ ok(r1.unique === 20 && r1.defined, `20 concurrent inserts → 20 unique ids (got
 // 2. external explicit-id import, then re-init heals the sequence
 const bteId = psqlDb(DBNAME, "SELECT id FROM projects WHERE code = 'BTE-WP4-HBC';");
 psqlDb(DBNAME, `INSERT INTO zones (id, project_id, code) VALUES (9999, ${bteId}, 'LEGACY-IMPORT');`);
-execSync('node backend/src/db/init.js', { encoding: 'utf8', cwd: '/home/vutun/pmo_project', env: { ...process.env, DATABASE_URL: FRESH_URL }, timeout: 180000 });
+execSync('node backend/src/db/init.js', { encoding: 'utf8', cwd: ROOT, env: { ...process.env, DATABASE_URL: FRESH_URL }, timeout: 180000 });
 const out2 = nodeEval(`
   import { getDb, closeDb } from './backend/src/db/index.js';
   const r = await getDb().prepare('INSERT INTO zones (project_id, code) VALUES (?, ?)').runAsync(${bteId}, 'AFTER-RESYNC');
   console.log(JSON.stringify({ id: r.lastInsertRowid }));
   await closeDb();
 `);
-ok(JSON.parse(out2.trim().split('\n').pop()).id === 10000, 'next id after resync is 10000');
+// In **giá trị thật** vào thông điệp: bài này từng đỏ trong lúc quét cả bộ mà thông điệp
+// chỉ in `10000` (chuỗi cứng) nên không biết con số là bao nhiêu. Cùng nguyên tắc đã áp cho
+// `concurrency.mjs`: một khẳng định đỏ phải tự đủ dữ kiện để tái hiện.
+const afterResync = Number(JSON.parse(out2.trim().split('\n').pop()).id);
+ok(afterResync === 10000, `next id after resync is 10000 (got ${afterResync})`);
 
 // 3. id-less table needs no workaround
 const out3 = nodeEval(`
@@ -62,7 +68,7 @@ const out3 = nodeEval(`
 `);
 ok(JSON.parse(out3.trim().split('\n').pop()).changes === 1, 'INSERT into id-less table works (auto-probe, no RETURNING hack)');
 
-superpsql(`DROP DATABASE IF EXISTS ${DBNAME};`);
+adminPsql(`DROP DATABASE IF EXISTS ${DBNAME};`);
 ok(true, 'scratch database dropped');
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');

@@ -1,0 +1,31 @@
+[Unit]
+# Postgres của bản demo này. KHÔNG dùng được gói `postgresql` của hệ thống: data dir
+# nằm trong repo (`data/pgdata`) và chạy bằng chính user này, cổng 5433.
+#
+# Vì sao phải có unit này: Postgres chạy bằng tay thì **không tự lên sau reboot**, còn
+# `pmo-api.service` thì có. Đo 2026-09-30: sau một đêm, `pmo-api` báo `active` còn
+# `/api/ready` trả 503 — Postgres chết từ hôm trước. Tệ hơn: `pg-ctl.sh start` in
+# "PG already running" vì tin `postmaster.pid` cũ, nên **lệnh khôi phục trong runbook
+# không chạy được**. Cả hai đã sửa; unit này chặn tái diễn từ phía khởi động máy.
+#
+# Cần `loginctl enable-linger vutun` để unit user chạy cả khi chưa đăng nhập.
+# Đã bật trên máy này (đo: `loginctl show-user vutun --property=Linger` → `Linger=yes`).
+Description=PMO PostgreSQL (data dir trong repo, cổng 5433)
+Documentation=file:///home/vutun/pmo_project_procore/deploy/single-machine/README.md
+After=network.target
+Before=pmo-api.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/vutun/pmo_project_procore
+# `pg-ctl.sh start` tự dọn `postmaster.pid` cũ rồi **xác nhận bằng cổng** trước khi
+# trả 0, nên systemd coi unit này thành công là có thật.
+ExecStart=/home/vutun/pmo_project_procore/backend/scripts/pg-ctl.sh start
+ExecStop=/home/vutun/pmo_project_procore/backend/scripts/pg-ctl.sh stop
+# Dừng sạch khi `pmo-api` dừng, để `systemctl --user stop pmo-api` không kéo theo DB.
+TimeoutStartSec=120
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

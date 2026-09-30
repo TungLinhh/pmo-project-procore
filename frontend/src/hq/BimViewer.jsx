@@ -10,20 +10,24 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { IfcAPI, IFCWALL, IFCSLAB, IFCCOLUMN, IFCBEAM, IFCROOF, IFCSTAIR, IFCWINDOW, IFCDOOR, IFCBUILDINGELEMENTPROXY } from 'web-ifc';
 import wasmUrl from 'web-ifc/web-ifc.wasm?url';
 import { getToken } from '../api/index.js';
+import { t, useLang } from '../i18n/index.js';
 
-const TYPES = [
-  { flag: IFCWALL, label: 'Tường', color: 0xd9c1a3 },
-  { flag: IFCSLAB, label: 'Sàn', color: 0x9aa5b1 },
-  { flag: IFCCOLUMN, label: 'Cột', color: 0xc47f5a },
-  { flag: IFCBEAM, label: 'Dầm', color: 0x8a6f4d },
-  { flag: IFCROOF, label: 'Mái', color: 0x7d8ca3 },
-  { flag: IFCSTAIR, label: 'Thang', color: 0xb0a89f },
-  { flag: IFCWINDOW, label: 'Cửa sổ', color: 0x9fd4e8 },
-  { flag: IFCDOOR, label: 'Cửa', color: 0x6f8f6a },
-  { flag: IFCBUILDINGELEMENTPROXY, label: 'Khác', color: 0xbbbbbb },
+function typeList() {
+  return [
+  { flag: IFCWALL, label: t('bv.el_wall'), color: 0xd9c1a3 },
+  { flag: IFCSLAB, label: t('bv.el_slab'), color: 0x9aa5b1 },
+  { flag: IFCCOLUMN, label: t('bv.el_column'), color: 0xc47f5a },
+  { flag: IFCBEAM, label: t('bv.el_beam'), color: 0x8a6f4d },
+  { flag: IFCROOF, label: t('bv.el_roof'), color: 0x7d8ca3 },
+  { flag: IFCSTAIR, label: t('bim.level'), color: 0xb0a89f },
+  { flag: IFCWINDOW, label: t('bv.el_window'), color: 0x9fd4e8 },
+  { flag: IFCDOOR, label: t('bv.el_door'), color: 0x6f8f6a },
+  { flag: IFCBUILDINGELEMENTPROXY, label: t('bv.el_other'), color: 0xbbbbbb },
 ];
+}
 
 export default function BimViewer() {
+  useLang(); // nhãn lớp BIM đổi theo nút [VI|EN]
   const { uploadId } = useParams();
   const mountRef = useRef(null);
   const [state, setState] = useState({ phase: 'loading', meshes: 0, meta: null, error: null });
@@ -38,11 +42,11 @@ export default function BimViewer() {
     (async () => {
       try {
         // 1. Model bytes (reuse the authenticated download endpoint).
-        const blob = await fetch(`/api/uploads/${uploadId}/download`, { headers: { Authorization: `Bearer ${getToken()}` } })
+        const blob = await fetch(`/api/bim/models/${uploadId}/download`, { headers: { Authorization: `Bearer ${getToken()}` } })
           .then(r => { if (!r.ok) throw new Error(`Tải model thất bại (HTTP ${r.status})`); return r.blob(); });
         const data = new Uint8Array(await blob.arrayBuffer());
         // 2. Parse + tessellate (cap: skip models > practical limit with message).
-        if (data.length > 50 * 1024 * 1024) throw new Error('Model quá lớn cho viewer trình duyệt (>50MB) — dùng nút Tải .ifc bên dưới');
+        if (data.length > 50 * 1024 * 1024) throw new Error(t('bv.err_too_big'));
         api = new IfcAPI();
         // Custom locateFile: Emscripten asks for bare names ("web-ifc.wasm" /
         // "web-ifc-mt.wasm") but Vite emits a HASHED ?url asset. Answer every
@@ -72,7 +76,7 @@ export default function BimViewer() {
         const mat = (c) => new THREE.MeshLambertMaterial({ color: c, side: THREE.DoubleSide });
         let meshes = 0;
         const byType = {};
-        for (const t of TYPES) {
+        for (const t of typeList()) {
           const group = new THREE.Group();
           group.name = t.label;
           try {
@@ -120,6 +124,17 @@ export default function BimViewer() {
     };
   }, [uploadId]);
 
+  async function downloadOriginal() {
+    const r = await fetch(`/api/bim/models/${uploadId}/download`, { headers: { Authorization: `Bearer ${getToken()}` } });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `bim-model-${uploadId}.ifc`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
   // Type visibility chips (honest scope: filter by element type, not storey —
   // storey containment needs a spatial query the fixture-scale engine skips).
   useEffect(() => {
@@ -132,11 +147,11 @@ export default function BimViewer() {
     <div>
       <div className="page-header">
         <div>
-          <h1>Xem mô hình 3D</h1>
+          <h1>{t('bv.h1')}</h1>
           <div className="meta">
-            {state.phase === 'loading' && 'Đang tải + dựng hình...'}
+            {state.phase === 'loading' && t('bv.busy_loading')}
             {state.phase === 'ready' && `${state.meshes} meshes · kéo để xoay, cuộn để zoom`}
-            {state.phase === 'empty' && 'Model không có hình học trích xuất được — xem metadata bên dưới'}
+            {state.phase === 'empty' && t('bv.err_no_geometry')}
             {state.phase === 'error' && `Lỗi: ${state.error}`}
           </div>
         </div>
@@ -144,11 +159,12 @@ export default function BimViewer() {
       <div ref={mountRef} data-testid="bim-canvas" style={{ width: '100%', minHeight: 420, border: '1px solid var(--c-border)', borderRadius: 8, overflow: 'hidden' }} />
       {state.phase === 'ready' && (
         <div className="filter-bar" style={{ marginTop: 8 }}>
-          {TYPES.map(t => (
-            <button key={t.label} className={hidden[t.label] ? 'btn btn-secondary' : 'btn'}
+          {/* Tham số không tên `t` — xem scripts/check-i18n-shadow.mjs */}
+          {typeList().map((type) => (
+            <button key={type.label} className={hidden[type.label] ? 'btn btn-secondary' : 'btn'}
               style={{ fontSize: 12, padding: '5px 10px' }}
-              onClick={() => setHidden(h => ({ ...h, [t.label]: !h[t.label] }))}>
-              {t.label}
+              onClick={() => setHidden(h => ({ ...h, [type.label]: !h[type.label] }))}>
+              {type.label}
             </button>
           ))}
         </div>
@@ -157,8 +173,8 @@ export default function BimViewer() {
         <div className="empty" style={{ marginTop: 8 }}>
           {(state.meta?.storeys || []).length > 0
             ? `Metadata: ${(state.meta.storeys || []).map(s => s.name).join(', ')} · ${state.meta.space_count ?? 0} spaces`
-            : 'Không đọc được metadata.'}{' '}
-          <a href={`/api/uploads/${uploadId}/download`}>Tải file .ifc gốc</a>
+            : t('bv.err_metadata')}{' '}
+          <button className="btn btn-secondary" onClick={() => downloadOriginal().catch((e) => setState((s) => ({ ...s, error: `Tải file thất bại: ${e.message}` })))}>{t('bv.btn_download')}</button>
         </div>
       )}
     </div>

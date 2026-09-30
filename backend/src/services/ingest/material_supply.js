@@ -7,7 +7,7 @@
 // detected by code-shaped Reference (digits required — category labels skip).
 import { getDb } from '../../db/index.js';
 import { recordFailure } from './failures.js';
-import { readSheet, toText, toInt, toDate } from '../../lib/excel.js';
+import { readSheet, readWorkbook, toText, toInt, toDate } from '../../lib/excel.js';
 import { findOrCreateZone } from './index.js';
 import { norm } from '../../lib/classify.js';
 
@@ -116,9 +116,20 @@ function parseParent(row, map) {
   };
 }
 
+function deriveProcurementStatus(raw) {
+  const value = String(raw || '').toLowerCase();
+  if (/accept|nghiem thu|đã về|da ve|received/.test(value)) return 'ACCEPTED';
+  if (/deliver|received|giao hang|đã giao|da giao|về công trường|ve cong truong/.test(value)) return 'DELIVERED';
+  if (/transport|shipping|đang vận chuyển|van chuyen|shipment/.test(value)) return 'IN_TRANSIT';
+  if (/production|sản xuất|san xuat|manufactur/.test(value)) return 'PRODUCTION';
+  if (/purchase order|\bpo\b|đặt hàng|dat hang|ordered/.test(value)) return 'PO_ISSUED';
+  if (/approved|duyet|duyệt/.test(value)) return 'MSB_APPROVED';
+  if (/prepar|chuẩn bị|chuan bi|requested|yêu cầu|yeu cau/.test(value)) return 'MSB_PREPARING';
+  return 'REQUESTED';
+}
+
 export async function parse(filePath, projectId, zoneCode) {
-  const XLSX = (await import('xlsx')).default;
-  const wb = XLSX.readFile(filePath, { cellDates: true });
+  const wb = readWorkbook(filePath);
   const { code, name } = resolveZone(zoneCode);
   const sheets = [];
   let skippedEmpty = 0;
@@ -167,8 +178,34 @@ export async function commit(parsed, projectId, zoneCode, uploadId = null) {
         const notes = [row.remark, row.supplier ? `NCC: ${row.supplier}` : null, row.contract_no ? `HĐ: ${row.contract_no}` : null,
           row.acceptance ? `NT: ${row.acceptance}` : null, ...overflow].filter(Boolean).join(' | ') || null;
         const b = row.batches;
+        // `setCols` tường minh, theo đúng tiền lệ `services/ingest/shop_drawing.js:213`.
+        //
+        // Không có nó thì mỗi lần nạp lại file ghi đè ba cột mà ứng dụng đang quản lý:
+        //
+        //  • `progress_pct` — sheet không có dòng batch nào thì `progress` là `null`,
+        //    và `EXCLUDED.progress_pct = NULL` **xoá sạch** tiến độ đã nhập trong ứng
+        //    dụng (qua `PATCH /projects/:id/construction-schedule/:itemId` hoặc MSB).
+        //    Sheet không nói "tiến độ bằng 0", nó nói *không có gì*.
+        //  • `procurement_status` — cột nằm trong state machine
+        //    (`PROCUREMENT_TRANSITIONS` + `checkTransition` + audit ở
+        //    `routes/materials.js`). Ghi đè nó từ chữ trong sheet **bỏ qua toàn bộ**
+        //    state machine, không để lại dấu vết audit, và tạo ra hàng mâu thuẫn:
+        //    vật tư đã `ACCEPTED` (có `accepted_at`, `acceptance_result='PASS'`) thì
+        //    `accepted_at` còn nguyên vì không nằm trong `setCols`, còn
+        //    `procurement_status` bị đẩy lại `IN_TRANSIT`.
+        //  • `notes` — ghép từ sheet, xoá ghi chú nhập tay.
+        //
+        // Nguyên tắc đã dùng ở `shop_drawing.js`: **sheet là nguồn sự thật cho dữ
+        // liệu có trong sheet; ứng dụng là nguồn sự thật cho vòng đời và trạng thái
+        // duyệt**. Lần đầu tiên tạo mới thì các cột này vẫn vào đúng (giá trị trong
+        // `row`), chỉ thôi ghi đè khi dòng đã tồn tại.
+        const SET_COLS = [
+          'zone_id', 'source_sheet', 'upload_id', 'name_vi',
+          'request_date_1', 'delivery_date_1', 'request_date_2', 'delivery_date_2',
+          'request_date_3', 'delivery_date_3', 'request_date_4', 'delivery_date_4',
+        ];
         await db.upsert('materials',
-          { conflictCols: ['project_id', 'zone_id', 'material_code'] },
+          { conflictCols: ['project_id', 'zone_id', 'material_code'], setCols: SET_COLS },
           {
             project_id: projectId, zone_id: zoneId, source_sheet: sheet.sheet, upload_id: uploadId,
             material_code: row.ref_code, name_vi: row.description,
@@ -177,6 +214,7 @@ export async function commit(parsed, projectId, zoneCode, uploadId = null) {
             request_date_2: b[1]?.request_date || null, delivery_date_2: b[1]?.actual || null,
             request_date_3: b[2]?.request_date || null, delivery_date_3: b[2]?.actual || null,
             request_date_4: b[3]?.request_date || null, delivery_date_4: b[3]?.actual || null,
+             procurement_status: deriveProcurementStatus(row.status),
           }
         );
         report.ok++;

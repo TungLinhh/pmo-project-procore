@@ -1,22 +1,28 @@
 // STEP1-03: TĐ TỔNG cross-check — rollup % vs ingested zone-detail aggregates.
 // Needs the real BTE folder (BTE_DATA_DIR); skips cleanly when absent (CI).
-// Run: BTE_DATA_DIR=/mnt/c/Users/vutun/Downloads/2020.03.11\ MEP-BTE-PCR/2020.01.11\ MEP-BTE-PCR DATABASE_URL=... node tests/e2e/step1-03-crosscheck.mjs
+// Run: BTE_DATA_DIR=/path/to/BTE-source DATABASE_URL=... node tests/e2e/step1-03-crosscheck.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
+import { cleanupProjectsOnExit } from './lib-cleanup.mjs';
 
-const BTE = process.env.BTE_DATA_DIR || '/mnt/c/Users/vutun/Downloads/2020.03.11 MEP-BTE-PCR/2020.01.11 MEP-BTE-PCR';
-if (!existsSync(`${BTE}/TIẾN ĐỘ SHOP/MEP-BTE-SHD-BOH.xlsx`)) {
-  console.log('SKIP — BTE_DATA_DIR not present');
-  process.exit(0);
-}
+// Tên file nguồn: dùng `bte-files.mjs` để dịch tên chuẩn ↔ tên gốc (xem file đó).
+// Không còn `SKIP` khi thiếu dữ liệu: thiếu thì **ném lỗi kèm cả hai danh sách tên**,
+// vì `SKIP` im lặng chính là lý do ba bài `step1` này chưa từng chạy với dữ liệu thật
+// trong khi dữ liệu thật vẫn nằm ngay trong `reference_sheets/`.
+const { btePath, bteRoot } = await import('./bte-files.mjs');
+const BTE = bteRoot();
 
+
+// Dọn dự án thử nghiệm nếu bài dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupProjectsOnExit(['XCHECK-%'], { label: 'step1-03-crosscheck' });
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3216';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3216' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) });
   const { token } = await login.json();
@@ -39,9 +45,9 @@ try {
     return { up, cfg, cmt };
   }
 
-  const shop = await ingestFile(`${BTE}/TIẾN ĐỘ SHOP/MEP-BTE-SHD-BOH.xlsx`, 'BOH', 'shop_drawing');
+  const shop = await ingestFile(btePath('TIẾN ĐỘ SHOP', 'MEP-BTE-SHD-BOH.xlsx'), 'BOH', 'shop_drawing');
   ok(shop.cmt.status === 'SUCCESS' || shop.cmt.status === 'PARTIAL', `BOH shop committed (${shop.cmt.status}, ok=${shop.cmt.ok})`);
-  const sched = await ingestFile(`${BTE}/TIẾN ĐỘ THI CÔNG/MEP-BTE-CSP-BOH.xlsx`, 'BOH', 'construction_schedule');
+  const sched = await ingestFile(btePath('TIẾN ĐỘ THI CÔNG', 'MEP-BTE-CSP-BOH.xlsx'), 'BOH', 'construction_schedule');
   ok(sched.cmt.status === 'SUCCESS' || sched.cmt.status === 'PARTIAL', `BOH schedule committed (${sched.cmt.status}, ok=${sched.cmt.ok})`);
 
   // stage the two rollups (no commit — cross-check reads them)
@@ -50,8 +56,8 @@ try {
     fd.append('file', new Blob([readFileSync(absPath)]), absPath.split('/').pop());
     return fetch(BASE + '/api/upload', { method: 'POST', headers: H, body: fd }).then(r => r.json());
   }
-  const mshop = await stageOnly(`${BTE}/TIẾN ĐỘ SHOP/HBG-BTE-MSHOP-01.xlsx`);
-  const csp = await stageOnly(`${BTE}/TIẾN ĐỘ THI CÔNG/MEP-BTE-CSP-01.xlsx`);
+  const mshop = await stageOnly(btePath('TIẾN ĐỘ SHOP', 'HBG-BTE-MSHOP-01.xlsx'));
+  const csp = await stageOnly(btePath('TIẾN ĐỘ THI CÔNG', 'MEP-BTE-CSP-01.xlsx'));
 
   const xShop = await fetch(BASE + `/api/upload/${mshop.upload_id}/crosscheck`, { method: 'POST', headers: J, body: JSON.stringify({ project_id: pid, kind: 'shop' }) }).then(r => r.json());
   ok(xShop.rollup_sheet && xShop.zones.length > 5, `shop rollup read (${xShop.zones.length} zones from ${xShop.rollup_sheet})`);
@@ -67,7 +73,11 @@ try {
   const bad = await fetch(BASE + '/api/upload/999999999/crosscheck', { method: 'POST', headers: J, body: JSON.stringify({ project_id: pid, kind: 'shop' }) });
   ok(bad.status === 404, `missing upload → 404 (got ${bad.status})`);
 
-  execSync(`PGPASSWORD=pmo_dev_pwd /home/linuxbrew/.linuxbrew/bin/psql -h 127.0.0.1 -p 5433 -U pmo_user -d pmo -t -A -c "DELETE FROM file_uploads WHERE project_id=${pid}; DELETE FROM shop_drawings WHERE project_id=${pid}; DELETE FROM construction_schedule_items WHERE project_id=${pid}; DELETE FROM zones WHERE project_id=${pid}; DELETE FROM projects WHERE id=${pid};"`);
+  // Dọn: **không** dựng tay. Bản dọn tay ở đây liệt kê 5 bảng con nhưng bỏ sót
+  // `work_items` (do `commit` của `construction_schedule` tạo ra) ⇒ `DELETE FROM projects`
+  // hỏng FK `23503` và giết tiến trình **trước** khi in tổng kết. `cleanupProjectsOnExit`
+  // (đăng ký ở đầu file) biết 34 bảng con và chạy ở `process.on('exit')` nên chịu được
+  // cả đường thoát này lẫn SIGPIPE.
 } finally {
   srv.kill('SIGTERM');
   await new Promise(r => setTimeout(r, 1000));

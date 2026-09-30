@@ -1,5 +1,6 @@
 // P1-05: bell/center/progress deep-links land on the real detail route + detail loads.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p1-05-issue-links.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn, execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
@@ -24,13 +25,13 @@ for (const f of ['frontend/src/components/BellDropdown.jsx', 'frontend/src/hq/No
 }
 
 // live: the detail record behind such a link actually loads via API
-const PSQL = 'PGPASSWORD=pmo_dev_pwd /home/linuxbrew/.linuxbrew/bin/psql -h 127.0.0.1 -p 5433 -U pmo_user -d pmo -t -A';
+const PSQL = `PGPASSWORD=${process.env.PGPASSWORD || 'pmo_dev_pwd'} ${process.env.PSQL_BIN || 'psql'} -h ${process.env.PGHOST || '127.0.0.1'} -p ${process.env.PGPORT || '5433'} -U ${process.env.PGUSER || 'pmo_user'} -d ${process.env.PGDATABASE || 'pmo'} -t -A`;
 const psql = (sql) => execSync(`${PSQL} -c "${sql.replace(/"/g, '\\"')}"`, { encoding: 'utf8' }).trim();
 const title = `p1-05-${Date.now()}`;
 const iid = psql(`INSERT INTO issues (tenant_id, project_id, title, body, severity, status) VALUES (1, 1, '${title}', 'x', 'HIGH', 'OPEN') RETURNING id;`).split('\n')[0];
 
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3205' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) });
   const { token, user } = await login.json();

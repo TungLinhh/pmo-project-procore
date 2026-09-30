@@ -1,10 +1,73 @@
 /* HQ Shell - clean, compact, navy sidebar, icon đơn sắc */
+/* Thanh trên cùng của sidebar và của vùng nội dung phải cùng cao, nếu không
+   tiêu đề trang lệch đối với khối thương hiệu (đo được: 64px vs 57px). */
+:root { --shell-topbar-h: 57px; }
 .shell {
   display: grid;
   grid-template-columns: 220px 1fr;
   height: 100vh;
   background: var(--c-bg);
+  transition: grid-template-columns var(--t-fast);
 }
+/* Rail mode: sidebar thu thành thanh icon, màn hình chính lấy thêm ~164px. */
+.shell.rail { grid-template-columns: 56px 1fr; }
+.shell.rail .shell-sidebar { align-items: center; }
+/* Rail: bỏ logo công ty, chỉ giữ nút mở rộng menu ở đầu thanh. */
+/* Trong dark mode --c-primary hoá thành xanh sáng (#7cb9ff) nên chữ trắng
+   trên đó chỉ còn 2.05:1. Dùng --c-text-i (tối) trên nền sáng. */
+.theme-dark .shell-brand .logo,
+.theme-dark .shell-avatar { color: var(--c-text-i); }
+.theme-dark .field-header .logo { color: var(--c-text-i); }
+.shell.rail .shell-brand { padding: 8px 0 10px; justify-content: center; width: 100%; }
+.shell.rail .shell-brand .logo { display: none; }
+.shell.rail .rail-toggle {
+  margin: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border-color: var(--c-border-strong);
+  color: var(--c-text-2);
+}
+.shell.rail .rail-toggle:hover { background: var(--c-surface-2); color: var(--c-primary); }
+.shell.rail .rail-toggle-icon { display: flex; align-items: center; justify-content: center; }
+.shell.rail .shell-menu { padding: 6px 8px; width: 100%; }
+.shell.rail .shell-menu a {
+  justify-content: center;
+  padding: 8px 0;
+  gap: 0;
+}
+.shell.rail .group-toggle {
+  justify-content: center;
+  height: 1px;
+  margin: 8px 6px;
+  padding: 0;
+  background: var(--c-border);
+  pointer-events: none;
+}
+.shell.rail .group-toggle:hover { background: var(--c-border); }
+.shell.rail .shell-footer { padding: 8px 0; justify-content: center; flex-direction: column; gap: 6px; width: 100%; }
+.shell.rail .shell-brand .text,
+.shell.rail .shell-menu .group,
+.shell.rail .shell-menu a span,
+.shell.rail .group-chevron,
+.shell.rail .shell-user { display: none; }
+.rail-toggle {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  color: var(--c-text-2);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.rail-toggle:hover { background: var(--c-surface-2); color: var(--c-text); }
+.rail-toggle-icon { display: flex; align-items: center; justify-content: center; }
+.shell.rail .drawer-close { display: none; }
 .shell-sidebar {
   background: var(--c-surface);
   border-right: 1px solid var(--c-border);
@@ -13,11 +76,13 @@
   overflow: hidden;
 }
 .shell-brand {
-  padding: 14px 16px;
+  height: var(--shell-topbar-h);
+  padding: 0 16px;
   border-bottom: 1px solid var(--c-border);
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 .shell-brand .logo {
   width: 28px; height: 28px;
@@ -40,6 +105,28 @@
   color: var(--c-text-3);
   letter-spacing: 0.5px;
 }
+/* Collapsible group header — full-width button, hover như menu item */
+.group-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0 4px 0 0;
+  border-radius: var(--r-md);
+}
+.group-toggle:hover { background: var(--c-surface-2); }
+.group-toggle .group { padding: 10px 8px 4px; }
+.group-chevron {
+  display: flex;
+  align-items: center;
+  color: var(--c-text-3);
+  transition: transform var(--t-fast);
+  padding-right: 6px;
+}
+.group-chevron.open { transform: rotate(90deg); }
 .shell-menu a {
   display: flex;
   align-items: center;
@@ -80,7 +167,8 @@
 .shell-header {
   background: var(--c-surface);
   border-bottom: 1px solid var(--c-border);
-  padding: 10px 20px;
+  height: var(--shell-topbar-h);
+  padding: 0 20px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -112,21 +200,20 @@
 /* ====== Project Control Center - mục 4-6 ====== */
 .kpi-strip {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  margin-bottom: 16px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
 }
 .kpi-card {
-  background: var(--c-surface);
+  background: linear-gradient(180deg, var(--c-surface), color-mix(in srgb, var(--c-surface) 94%, var(--c-primary-bg)));
   border: 1px solid var(--c-border);
-  border-radius: var(--r-lg);
-  padding: 14px 16px;
-  cursor: pointer;
-  transition: border-color var(--t-fast);
+  border-radius: 10px;
+  padding: 11px 13px;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
 }
-.kpi-card:hover { border-color: var(--c-border-strong); }
-.kpi-card .label { font-size: 10.5px; text-transform: uppercase; color: var(--c-text-2); font-weight: 600; letter-spacing: 0.5px; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; }
-.kpi-card .value { font-size: 28px; font-weight: 700; color: var(--c-text); line-height: 1.1; }
+.kpi-card:hover { border-color: var(--c-border-strong); box-shadow: 0 4px 14px color-mix(in srgb, var(--c-primary) 8%, transparent); }
+.kpi-card .label { font-size: 10px; text-transform: uppercase; color: var(--c-text-2); font-weight: 650; letter-spacing: 0.45px; margin-bottom: 3px; display: flex; justify-content: space-between; align-items: center; }
+.kpi-card .value { font-size: 24px; font-weight: 720; color: var(--c-text); line-height: 1.08; font-variant-numeric: tabular-nums; }
 .kpi-card .sub { font-size: 11px; color: var(--c-text-2); margin-top: 2px; }
 .kpi-card.on-track { border-left: 3px solid var(--c-on-track); }
 .kpi-card.watch { border-left: 3px solid var(--c-watch); }
@@ -135,47 +222,212 @@
 
 .pillar-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
   margin-bottom: 16px;
 }
+/* SRS Mục 5: 4 lớp L1→L4 đọc theo thứ tự, nhưng dạng lưới ô để thông tin dày
+   thay vì 4 khối cao toàn trang. Mũi tên thứ tự nằm trong .layer-tag. */
+.pillar-grid.layer-stack {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+.gate-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 10px;
+}
+.gate-strip .label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+}
+.gate-strip .gate-pill { cursor: default; }
+.gate-strip .gate-pill .why {
+  font-weight: 500;
+  color: var(--c-text-2);
+  margin-left: 5px;
+}
+.layer-l0 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  border-left: 3px solid var(--c-primary);
+  padding: 8px 12px;
+  font-size: 12.5px;
+  margin-bottom: 2px;
+}
+.layer-l0 .meta { color: var(--c-text-2); font-size: 12px; }
+.layer-l0 .right { margin-left: auto; font-size: 12px; color: var(--c-text-2); }
+.layer-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  background: var(--c-accent-soft, var(--c-border));
+  border: 1px solid var(--c-border-strong);
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+.gate-pill {
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--c-border-strong);
+  border-radius: 999px;
+  padding: 2px 10px;
+  color: var(--c-text-2);
+}
+.gate-pill.open { color: var(--c-on-track); border-color: var(--c-on-track); }
+.gate-pill.wait { color: var(--c-behind); border-color: var(--c-behind); }
+.gate-pill.off { color: var(--c-text-3); border-style: dashed; }
+.pillar-card.is-waiting { border-style: dashed; }
+.gate-banner {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--c-behind);
+  background: color-mix(in srgb, var(--c-behind) 10%, transparent);
+  border: 1px dashed var(--c-behind);
+  border-radius: 5px;
+  padding: 3px 7px;
+  margin-bottom: 6px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.gate-banner.feedback { color: var(--c-watch); border-color: var(--c-watch); background: transparent; }
 .pillar-card {
   background: var(--c-surface);
-  border-radius: var(--r-lg);
+  border-radius: 10px;
   border: 1px solid var(--c-border);
-  padding: 16px;
+  padding: 9px 10px;
   cursor: pointer;
-  transition: border-color var(--t-fast);
+  transition: border-color var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast);
 }
-.pillar-card:hover { border-color: var(--c-border-strong); }
+.pillar-card:hover {
+  border-color: color-mix(in srgb, var(--c-primary) 35%, var(--c-border));
+  box-shadow: 0 5px 18px color-mix(in srgb, var(--c-primary) 7%, transparent);
+  transform: translateY(-1px);
+}
+.pillar-card:focus-visible {
+  outline: 2px solid var(--c-primary);
+  outline-offset: 2px;
+}
 .pillar-card .head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  gap: 6px;
+  margin-bottom: 6px;
 }
-.pillar-card h3 { font-size: 11px; text-transform: uppercase; color: var(--c-text-2); font-weight: 600; letter-spacing: 0.5px; }
+.pillar-card h3 { font-size: 10.5px; text-transform: uppercase; color: var(--c-text-2); font-weight: 600; letter-spacing: 0.5px; white-space: nowrap; }
+/* Hàng nhãn/giá trị dùng chung (Attention, Payment, PillarControlPanel…).
+   Phải khai báo color tường minh: Attention dùng <button class="row"> và
+   button KHÔNG kế thừa color, nên thiếu rule này làm chữ thành đen trên nền tối
+   (đo được: rgb(0,0,0) trên rgb(19,27,46)). */
+.breakdown { display: flex; flex-direction: column; }
+.breakdown .row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--c-text-2);
+  text-align: left;
+}
+.breakdown .row .k { color: var(--c-text-2); flex: 0 0 auto; }
+.breakdown .row .v { color: var(--c-text); font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.breakdown .row .v .badge { vertical-align: 1px; }
 .pillar-card .metric { font-size: 32px; font-weight: 700; color: var(--c-text); line-height: 1; margin-bottom: 4px; }
 .pillar-card .metric-label { font-size: 11px; color: var(--c-text-3); margin-bottom: 10px; }
-.pillar-card .breakdown { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin-bottom: 10px; }
-.pillar-card .breakdown .row { display: flex; justify-content: space-between; font-size: 12px; }
-.pillar-card .breakdown .row .k { color: var(--c-text-2); }
-.pillar-card .breakdown .row .v { font-weight: 600; color: var(--c-text); font-variant-numeric: tabular-nums; }
+/* Metric tiles: nhãn trên, số dưới. Thay cho hàng k/v giãn hết chiều ngang,
+   vốn làm nhãn dính mép trái còn số dán mép phải khi card rộng. */
+.pillar-card .metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(58px, 1fr));
+  gap: 1px;
+  background: var(--c-border);
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 6px 0;
+}
+.pillar-card .metric-grid > div {
+  background: var(--c-surface-2);
+  padding: 5px 7px;
+  min-width: 0;
+}
+.pillar-card .metric-grid .k {
+  display: block;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--c-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pillar-card .metric-grid .v {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pillar-card .metric-grid .v.sm { font-size: 11.5px; font-weight: 600; }
 .pillar-card .bar { background: var(--c-border); height: 6px; border-radius: 3px; overflow: hidden; margin: 8px 0 4px; }
 .pillar-card .bar-fill { height: 100%; background: var(--c-accent); border-radius: 3px; transition: width 0.3s; }
 .pillar-card .bar-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--c-text-2); }
-.pillar-card .warnings {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--c-border);
+.pillar-summary-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 2px;
+}
+.pillar-stats {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 14px;
+  color: var(--c-text-2);
   font-size: 11.5px;
+  line-height: 1.45;
+}
+.pillar-stats strong { color: var(--c-text); font-variant-numeric: tabular-nums; }
+.pillar-card .warnings {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--c-border);
+  font-size: 11px;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  gap: 4px 10px;
 }
+.s-curve-mini { width: 100%; min-width: 0; }
+.s-curve-mini svg { display: block; overflow: visible; width: 100%; max-height: 40px; }
+.s-curve-mini > div { display: flex; gap: 10px; font-size: 9.5px; color: var(--c-text-2); margin-top: 1px; }
 .pillar-card .warnings .warn { color: var(--c-behind); display: inline-flex; align-items: center; gap: 4px; font-weight: 500; }
 .pillar-card .warnings .crit { color: var(--c-critical); display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
-.pillar-card .view-link { font-size: 11px; color: var(--c-accent); margin-top: 8px; display: inline-flex; align-items: center; gap: 4px; }
+.pillar-card .view-link { font-size: 10.5px; color: var(--c-accent); margin-top: 5px; display: inline-flex; align-items: center; gap: 3px; }
 
 /* Data table */
 .data-table {
@@ -203,13 +455,37 @@
   border-radius: var(--r-sm);
   font-size: 12px;
 }
-.data-table-body { max-height: 600px; overflow-y: auto; }
+.data-table-body { max-height: 520px; overflow: auto; }
+.table-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--c-border);
+  background: var(--c-surface-2);
+  color: var(--c-text-2);
+  font-size: 11.5px;
+  flex-wrap: wrap;
+}
+.table-pagination-controls { display: flex; align-items: center; gap: 6px; }
+.table-pagination .btn-sm { min-width: 28px; padding: 3px 7px; }
+.table-page-size { display: flex; align-items: center; gap: 5px; }
+.table-page-size select {
+  padding: 3px 5px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-sm);
+  background: var(--c-surface);
+  color: var(--c-text);
+  font-size: 11.5px;
+}
+.table-page-count { min-width: 62px; text-align: center; font-variant-numeric: tabular-nums; }
 
 table { width: 100%; border-collapse: collapse; }
 table th {
   background: var(--c-surface-2);
   text-align: left;
-  padding: 7px 12px;
+  padding: 6px 10px;
   font-size: 10.5px;
   text-transform: uppercase;
   color: var(--c-text-2);
@@ -220,7 +496,7 @@ table th {
   top: 0;
   z-index: 1;
 }
-table td { padding: 7px 12px; border-bottom: 1px solid var(--c-border); font-size: 12.5px; color: var(--c-text); }
+table td { padding: 6px 10px; border-bottom: 1px solid var(--c-border); font-size: 12px; color: var(--c-text); }
 table tr:last-child td { border-bottom: none; }
 table tbody tr:hover { background: var(--c-surface-2); }
 /* Row states use themed translucent backgrounds — never hardcoded hex (dark-mode bug). */
@@ -228,6 +504,7 @@ table tr.exception { background: var(--c-watch-bg); }
 table tr.exception:hover { background: var(--c-surface-3); }
 table tr.critical { background: var(--c-critical-bg); }
 table tr.critical:hover { background: var(--c-surface-3); }
+.row-actions { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 table .num { text-align: right; font-variant-numeric: tabular-nums; }
 table .center { text-align: center; }
 table code { background: var(--c-surface-2); padding: 1px 5px; border-radius: 3px; font-size: 11.5px; color: var(--c-text-2); font-family: 'SF Mono', Menlo, monospace; }
@@ -315,6 +592,22 @@ table code { background: var(--c-surface-2); padding: 1px 5px; border-radius: 3p
   }
   .shell-hamburger { display: flex; }
   .drawer-close { display: block; }
+  /* Drawer trên mobile luôn full-width, rail không áp dụng. */
+  .rail-toggle { display: none; }
+  .shell.rail { grid-template-columns: 1fr; }
+  .shell.rail .shell-sidebar { align-items: stretch; }
+  .shell.rail .shell-brand { padding: 0 16px; justify-content: flex-start; }
+  .shell.rail .shell-brand .logo { display: flex; }
+  .shell.rail .shell-brand .text,
+  .shell.rail .shell-menu .group,
+  .shell.rail .shell-menu a span,
+  .shell.rail .group-chevron,
+  .shell.rail .shell-user { display: revert; }
+  .shell.rail .shell-menu { padding: 8px; }
+  .shell.rail .shell-menu a { justify-content: flex-start; padding: 6px 8px; gap: 8px; }
+  .shell.rail .group-toggle { justify-content: space-between; height: auto; margin: 0; padding: 0 4px 0 0; background: transparent; pointer-events: auto; }
+  .shell.rail .group-toggle:hover { background: var(--c-surface-2); }
+  .shell.rail .shell-footer { padding: 10px 12px; justify-content: flex-start; flex-direction: row; }
   .shell-sidebar {
     position: fixed !important;
     top: 0;
@@ -342,6 +635,8 @@ table code { background: var(--c-surface-2); padding: 1px 5px; border-radius: 3p
   .shell-content {
     padding: 12px !important;
   }
+  /* 4 pillars: 2 cột trên tablet, 1 cột trên điện thoại */
+  .pillar-grid.layer-stack { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   /* Compact table on mobile */
   .data-table table {
     font-size: 11px;
@@ -350,12 +645,22 @@ table code { background: var(--c-surface-2); padding: 1px 5px; border-radius: 3p
   .data-table table td {
     padding: 4px 6px;
   }
+  .data-table th:first-child,
+  .data-table td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: var(--c-surface);
+    box-shadow: 1px 0 0 var(--c-border);
+  }
   .kpi-strip {
     grid-template-columns: repeat(2, 1fr) !important;
   }
-  .pillar-grid {
-    grid-template-columns: 1fr !important;  /* stack pillars */
-  }
+  .pillar-grid.layer-stack { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .pillar-card { padding: 9px 10px !important; }
+  .pillar-summary-row { gap: 8px; }
+  .pillar-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 8px; }
+  .s-curve-mini { width: 100%; min-width: 0; }
   .filter-bar {
     flex-wrap: wrap;
     gap: 6px;
@@ -376,11 +681,11 @@ table code { background: var(--c-surface-2); padding: 1px 5px; border-radius: 3p
     flex-wrap: wrap;
     gap: 6px;
   }
-  /* Modal full width on mobile */
+  /* Modal full width on mobile — width only, no extra margin (backdrop pads) */
   .modal {
-    width: calc(100vw - 24px) !important;
+    width: 100% !important;
     max-width: 100% !important;
-    margin: 12px !important;
+    margin: 0 !important;
   }
   /* KPI card */
   .kpi-card {
@@ -391,38 +696,36 @@ table code { background: var(--c-surface-2); padding: 1px 5px; border-radius: 3p
   }
 }
 
-/* Pillar card - compact layout */
-.pillar-card {
-  padding: 10px 12px !important;
-  gap: 6px !important;
-  min-height: 200px;
+/* Keep chart anchors stable while allowing the card to shrink with content. */
+.pillar-card .pie-wrap { flex: 0 0 88px; }
+.pillar-card h3 { margin: 0; }
+
+.pillar-skeleton {
+  min-height: 148px;
+  overflow: hidden;
 }
-.pillar-card .head {
-  margin-bottom: 4px !important;
+.pillar-skeleton strong,
+.pillar-skeleton span {
+  display: block;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--c-surface-2), var(--c-border), var(--c-surface-2));
+  background-size: 220% 100%;
+  animation: skeleton-slide 1.25s linear infinite;
 }
-.pillar-card h3 {
-  font-size: 12.5px !important;
-  margin: 0 !important;
+.pillar-skeleton strong { width: 42%; height: 16px; margin-bottom: 26px; }
+.pillar-skeleton span { height: 12px; margin-top: 13px; }
+.pillar-skeleton span:nth-child(3) { width: 78%; }
+.pillar-skeleton span:nth-child(4) { width: 58%; }
+.gate-error { border: 1px solid color-mix(in srgb, var(--c-critical) 35%, var(--c-border)); }
+@keyframes skeleton-slide {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
 }
-.pillar-card .breakdown {
-  margin-top: 4px !important;
+@media (max-width: 520px) {
+  .pillar-grid.layer-stack { grid-template-columns: 1fr !important; }
+  .pillar-card .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-.pillar-card .breakdown .row {
-  padding: 1px 0 !important;
-  font-size: 10.5px !important;
-}
-.pillar-card .warnings {
-  margin-top: 4px !important;
-  font-size: 10.5px !important;
-}
-.pillar-card .view-link {
-  margin-top: 4px !important;
-  font-size: 10.5px !important;
-}
-.pillar-card .pie-wrap {
-  flex-shrink: 0;
-}
-.pillar-card > div[style*="display: flex"] {
-  margin-bottom: 4px !important;
-  gap: 12px !important;
+
+@media (prefers-reduced-motion: reduce) {
+  .pillar-skeleton strong, .pillar-skeleton span { animation: none; }
 }

@@ -1,5 +1,6 @@
 // P1-07: /field/wbs no longer crashes — component's data sources load end to end.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p1-07-field-wbs.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
@@ -16,7 +17,7 @@ ok(src.includes('projects.list()'), 'WBS step 1 uses the real projects api');
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3207';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3207' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) });
   const { token } = await login.json();

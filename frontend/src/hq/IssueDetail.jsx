@@ -1,20 +1,12 @@
 // UI-014 / UI-006: Issue Detail page
 // Mục 6.5 - hiển thị issue + directives (CEO/PMO chỉ thị) + audit log + form gửi chỉ thị mới
 import { useEffect, useState } from 'react';
-import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { issues, directives, audit, getUser } from '../api/index.js';
 import { ICON } from '../icons.jsx';
-
-function relativeTime(iso) {
-  if (!iso) return '—';
-  const date = new Date(iso.replace(' ', 'T') + 'Z');
-  const diff = (Date.now() - date.getTime()) / 1000;
-  if (diff < 60) return 'Vừa xong';
-  if (diff < 3600) return `${Math.floor(diff / 60)} phút trước`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} giờ trước`;
-  if (diff < 604800) return `${Math.floor(diff / 86400)} ngày trước`;
-  return date.toLocaleString('vi-VN');
-}
+import { toast } from '../components/Toast.jsx';
+import { relativeTimeVi } from '../utils/datetime.js';
+import { t, th, useLang } from '../i18n/index.js';
 
 const SEV_COLORS = {
   CRITICAL: { bg: 'var(--c-critical-bg)', fg: 'var(--c-critical)' },
@@ -32,6 +24,7 @@ const STATUS_COLORS = {
 };
 
 export default function IssueDetail() {
+  useLang(); // re-render table headers on VI/EN toggle
   const [params] = useSearchParams();
   const itemId = params.get('item') || params.get('issue');
   const nav = useNavigate();
@@ -41,6 +34,8 @@ export default function IssueDetail() {
   const [submitting, setSubmitting] = useState(false);
   const [recipients, setRecipients] = useState([]); // {id,name,role}
   const [notifyIds, setNotifyIds] = useState([]);
+  const [directiveList, setDirectiveList] = useState([]);
+  const [auditList, setAuditList] = useState([]);
   const user = getUser() || { full_name: 'CEO' };
 
   async function load() {
@@ -51,7 +46,19 @@ export default function IssueDetail() {
     try {
       const i = await issues.get(itemId);
       setIssue(i);
-    } catch (e) {
+      if (i?.project_id) {
+        Promise.all([
+          directives.list({ project_id: i.project_id, issue_id: i.id }),
+          audit.list({ project_id: i.project_id, resource_type: 'issue', resource_id: i.id, limit: 50 }),
+        ]).then(([ds, as]) => {
+          setDirectiveList(Array.isArray(ds) ? ds : []);
+          setAuditList(Array.isArray(as) ? as : []);
+        }).catch(() => {
+          setDirectiveList([]);
+          setAuditList([]);
+        });
+      }
+    } catch {
       setIssue(null);
     } finally {
       setLoading(false);
@@ -82,9 +89,10 @@ export default function IssueDetail() {
         notify_to_user_ids: notifyIds,
       });
       setDirectiveText('');
+      toast.success(t('id.toast_sent'));
       await load();
     } catch (e) {
-      alert('Lỗi: ' + e.message);
+      toast.error(t('id.err_generic') + e.message);
     } finally {
       setSubmitting(false);
     }
@@ -95,18 +103,17 @@ export default function IssueDetail() {
       <div>
         <div className="page-header">
           <div>
-            <h1>Issue Detail</h1>
-            <div className="meta">Chọn issue từ danh sách</div>
+            <h1>{t('issdetail.h1')}</h1>
+            <div className="meta">{t('id.empty_select')}</div>
           </div>
         </div>
-        <div className="empty" style={{ padding: 60 }}>
-          Không có issue nào được chọn. <a href="#" onClick={e => { e.preventDefault(); nav('/hq/issues'); }}>Xem danh sách issues</a>
+        <div className="empty" style={{ padding: 60 }}>{t('id.empty_none')}<a href="#" onClick={e => { e.preventDefault(); nav('/hq/issues'); }}>{t('id.btn_view_list')}</a>
         </div>
       </div>
     );
   }
 
-  if (loading) return <div className="empty">Loading...</div>;
+  if (loading) return <div className="empty">{t('g.loading')}</div>;
   if (!issue) return <div className="empty">Issue #{itemId} không tồn tại</div>;
 
   const sev = SEV_COLORS[issue.severity] || SEV_COLORS.MEDIUM;
@@ -117,12 +124,10 @@ export default function IssueDetail() {
       <div className="page-header">
         <div>
           <h1>{issue.title}</h1>
-          <div className="meta">Issue #{issue.id} · {issue.category} · Tạo {relativeTime(issue.created_at)}</div>
+          <div className="meta">{t('id.issue_meta', { id: issue.id, category: issue.category, when: relativeTimeVi(issue.created_at) })}</div>
         </div>
         <div className="page-header-right">
-          <button className="btn btn-secondary" onClick={() => nav(-1)}>
-            ← Quay lại
-          </button>
+          <button className="btn btn-secondary" onClick={() => nav(-1)}>{t('id.btn_back_to_list')}</button>
         </div>
       </div>
 
@@ -140,36 +145,34 @@ export default function IssueDetail() {
 
       {/* Directives (CEO/PMO chỉ thị) */}
       <div className="issue-section-title">
-        <ICON.audit size={13} />
-        Chỉ thị từ CEO / PMO
-        <span className="badge" style={{ background: 'var(--c-primary-bg)', color: 'var(--c-primary)' }}>{issue.directives?.length || 0}</span>
+        <ICON.audit size={13} />{t('id.sec_directive')}<span className="badge" style={{ background: 'var(--c-primary-bg)', color: 'var(--c-primary)' }}>{directiveList.length}</span>
       </div>
       <div className="directive-list">
-        {issue.directives && issue.directives.length > 0 ? (
-          issue.directives.map(d => (
+        {directiveList.length > 0 ? (
+          directiveList.map(d => (
             <div key={d.id} className="directive-item">
               <div className="meta">
-                <span><strong>{d.from_user_name || 'CEO'}</strong> · {relativeTime(d.created_at)}</span>
+                <span><strong>{d.from_user_name || 'CEO'}</strong> · {relativeTimeVi(d.created_at)}</span>
                 {d.notify_to_user_ids && d.notify_to_user_ids !== '[]' && <span>↪ Notify: {d.notify_to_user_ids}</span>}
               </div>
               <div className="body">{d.body}</div>
             </div>
           ))
         ) : (
-          <div className="empty" style={{ padding: 16 }}>Chưa có chỉ thị nào. CEO/PMO có thể thêm bên dưới.</div>
+          <div className="empty" style={{ padding: 16 }}>{t('id.empty_directive')}</div>
         )}
       </div>
 
       {/* Form gửi chỉ thị */}
       <div className="directive-form">
         <textarea
-          placeholder="Ví dụ: Ưu tiên nhà cung cấp HVAC X, họp lại thứ 6 tuần sau với vendor để chốt timeline."
+          placeholder={t('id.example_ph')}
           value={directiveText}
           onChange={e => setDirectiveText(e.target.value)}
         />
         {recipients.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 8, fontSize: 12 }}>
-            <span style={{ color: 'var(--c-text-2)' }}>Gửi tới:</span>
+            <span style={{ color: 'var(--c-text-2)' }}>{t('id.lbl_send_to')}</span>
             {recipients.map(u => (
               <label key={u.id} style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}>
                 <input
@@ -183,17 +186,14 @@ export default function IssueDetail() {
           </div>
         )}
         <div className="form-meta">
-          <span>
-            Đăng với tên <strong>{user.full_name}</strong> ({user.role || 'CEO'}).<br />
-            Chỉ thị sẽ: hiển thị ở đây · gửi notification tới PM/PMO · ghi vào audit_log.
-          </span>
+          <span>{t('id.lbl_post_as')}<strong>{user.full_name}</strong> ({user.role || 'CEO'}).<br />{t('id.directive_note')}</span>
           <button
             className="btn"
             disabled={!directiveText.trim() || submitting}
             onClick={sendDirective}
             style={{ minWidth: 100 }}
           >
-            {submitting ? 'Đang gửi...' : <><ICON.arrow size={12} /> Gửi chỉ thị</>}
+            {submitting ? t('id.busy_sending') : <><ICON.arrow size={12} />{t('id.btn_send')}</>}
           </button>
         </div>
       </div>
@@ -202,24 +202,24 @@ export default function IssueDetail() {
       <div className="issue-section-title">
         <ICON.audit size={13} />
         Audit log
-        <span className="badge" style={{ background: 'var(--c-surface-2)', color: 'var(--c-text-2)' }}>{issue.audit?.length || 0}</span>
+        <span className="badge" style={{ background: 'var(--c-surface-2)', color: 'var(--c-text-2)' }}>{auditList.length}</span>
       </div>
       <div className="data-table">
         <div className="data-table-body">
-          {issue.audit && issue.audit.length > 0 ? (
+          {auditList.length > 0 ? (
             <table>
               <thead>
                 <tr>
-                  <th>Thời gian</th>
-                  <th>Người</th>
-                  <th>Hành động</th>
-                  <th>Note</th>
+                  <th>{th("Thời gian")}</th>
+                  <th>{th("Người")}</th>
+                  <th>{th("Hành động")}</th>
+                  <th>{th("Ghi chú")}</th>
                 </tr>
               </thead>
               <tbody>
-                {issue.audit.map(a => (
+                {auditList.map(a => (
                   <tr key={a.id}>
-                    <td style={{ color: 'var(--c-text-2)', fontSize: 11.5 }}>{relativeTime(a.created_at)}</td>
+                    <td style={{ color: 'var(--c-text-2)', fontSize: 11.5 }}>{relativeTimeVi(a.created_at)}</td>
                     <td><code>{a.user_name || '—'}</code></td>
                     <td><span className={`badge ${a.action === 'DIRECTIVE' ? 'workflow-REVIEW' : 'workflow-DRAFT'}`}>{a.action}</span></td>
                     <td style={{ fontSize: 12 }}>{a.note || '—'}</td>
@@ -228,7 +228,7 @@ export default function IssueDetail() {
               </tbody>
             </table>
           ) : (
-            <div className="empty">Chưa có audit event nào cho issue này</div>
+            <div className="empty">{t('id.empty_audit')}</div>
           )}
         </div>
       </div>

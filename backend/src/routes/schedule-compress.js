@@ -12,13 +12,22 @@ import { requireProjectAccess, checkProjectAccess } from '../lib/project-access.
 import { requireFeature } from '../lib/entitlements.js';
 import { getDb } from '../db/index.js';
 import { withAudit } from '../lib/with-audit.js';
+import { lockProject, readScheduleRows, scheduleFingerprint } from '../lib/baseline.js';
 import { computeCpm, compressSchedule, mapToCalendar, rowDurationDays, dateDiffDays, normalizeGaps, detectSummaryRows } from '../lib/cpm.js';
+import { errorBody } from '../lib/error-body.js';
+
+// Lỗi mang HTTP status để handler trả đúng mã. `lib/baseline.js` có hàm cùng
+// việc nhưng không export, nên khai báo riêng ở đây thay vì sửa baseline.
+const httpError = (status, error) => Object.assign(new Error(error), { status });
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 router.use(permissionMiddleware);
 router.use('/projects/:id', requireProjectAccess());
-const ENTERPRISE = [requireRole('admin', 'ceo', 'pm'), requireFeature('schedule-compress')];
+// Role split (deadline feature): PM/PMO propose (preview + view), only
+// CEO/Admin approve (apply/rollback). PMO was 403 before — now included.
+const CAN_PROPOSE = [requireRole('admin', 'ceo', 'pm', 'pmo'), requireFeature('schedule-compress')];
+const CAN_APPROVE = [requireRole('admin', 'ceo'), requireFeature('schedule-compress')];
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 // pg returns DATE columns as JS Date (or string via some paths) — normalize.
@@ -125,7 +134,7 @@ async function runCompression(db, tenantId, rows, links, targetEnd, policy) {
 }
 
 // POST /api/projects/:id/schedule-compress/preview {target_end_date, policy?, name?}
-router.post('/projects/:id/schedule-compress/preview', ...ENTERPRISE, async (req, res) => {
+router.post('/projects/:id/schedule-compress/preview', ...CAN_PROPOSE, async (req, res) => {
   const db = getDb();
   const { target_end_date, policy = {}, name } = req.body || {};
   if (!target_end_date || !/^\d{4}-\d{2}-\d{2}$/.test(target_end_date)) {
@@ -157,9 +166,14 @@ router.post('/projects/:id/schedule-compress/preview', ...ENTERPRISE, async (req
     if (!rows.length) return res.status(422).json({ error: 'project has no schedule items' });
     const out = await runCompression(db, req.user.tenant_id, rows, links, target_end_date, cleanPolicy);
     const ins = await withAudit(req, {
-      action: 'PREVIEW', resourceType: 'schedule_scenario', resourceId: 0,
+      // `defer` + `resource_id` trong kết quả callback: id kịch bản chỉ có sau INSERT,
+      // mà `withAudit` ghi dòng audit trong **cùng** transaction nên phải chờ.
+      // Trước đây ghi `resourceId: 0` — mọi dòng PREVIEW trong `audit_log` có cùng
+      // `resource_id = 0` (đo 2026-09-28), nên không truy được vừa tạo kịch bản nào,
+      // và `SELECT … WHERE resource_id = 0` gộp nhầm preview của mọi dự án/tenant.
+      defer: true,
+      action: 'PREVIEW', resourceType: 'schedule_scenario',
       context: { project_id: Number(req.params.id) },
-      after: { target_end_date, feasible: out.feasible, after_days: out.after_days },
       note: `Compression preview → ${target_end_date}: ${out.feasible ? `feasible (−${out.days_saved}d)` : 'infeasible'}`,
     }, async (client) => {
       const r = await client.query(
@@ -168,16 +182,22 @@ router.post('/projects/:id/schedule-compress/preview', ...ENTERPRISE, async (req
         [req.params.id, name || `Nén về ${target_end_date}`, target_end_date, JSON.stringify(cleanPolicy),
          JSON.stringify({ ...out, cal: undefined, durations: undefined }), req.user.id]
       );
-      return r.rows[0];
+      const row = r.rows[0];
+      return {
+        value: row,
+        resource_id: row.id,
+        before: null,
+        after: { target_end_date, feasible: out.feasible, after_days: out.after_days },
+      };
     });
     res.status(201).json({ scenario_id: ins.id, ...out });
   } catch (e) {
-    res.status(e.status || 500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 
 // POST /api/schedule-scenarios/:id/apply — recompute live, write dates, snapshot before.
-router.post('/schedule-scenarios/:id/apply', ...ENTERPRISE, async (req, res) => {
+router.post('/schedule-scenarios/:id/apply', ...CAN_APPROVE, async (req, res) => {
   const db = getDb();
   const sc = await db.prepare('SELECT * FROM schedule_scenarios WHERE id = ?').getAsync(req.params.id);
   if (!sc) return res.status(404).json({ error: 'Not found' });
@@ -207,16 +227,45 @@ router.post('/schedule-scenarios/:id/apply', ...ENTERPRISE, async (req, res) => 
       fieldChanges: [{ field: 'status', from: sc.status, to: 'APPLIED' }],
       note: `Apply compression: ${changes.length} items, −${out.days_saved}d → ${target}`,
     }, async (client) => {
+      // Khoá project rồi khoá dòng scenario, đúng như `routes/pillar-scenarios.js`.
+      // Thiếu hai bước này thì hai CEO apply hai scenario khác nhau của cùng dự án
+      // chạy song song: cả hai đọc cùng trạng thái gốc, `applied_before` của
+      // scenario bị ghi đè bởi lần chạy sau, và rollback sau đó khôi phục snapshot
+      // cũ ⇒ **xoá mất thay đổi của scenario còn lại**, không có dấu vết audit.
+      // Test e2e chạy tuần tự nên không bao giờ thấy lỗi này.
+      await lockProject(client, sc.project_id);
+      const fresh = (await client.query(
+        'SELECT status FROM schedule_scenarios WHERE id = $1 FOR UPDATE', [sc.id]
+      )).rows[0];
+      if (!fresh) throw httpError(404, 'Not found');
+      if (fresh.status === 'APPLIED') throw httpError(409, 'already applied — rollback first to re-run');
       for (const c of changes) {
         await client.query(
-          `UPDATE construction_schedule_items SET plan_start_date = $1, plan_end_date = $2, plan_duration_days = $3 WHERE id = $4`,
-          [c.after.plan_start_date, c.after.plan_end_date, c.after.plan_duration_days, c.id]
+          `UPDATE construction_schedule_items SET plan_start_date = $1, plan_end_date = $2, plan_duration_days = $3 WHERE id = $4 AND project_id = $5`,
+          [c.after.plan_start_date, c.after.plan_end_date, c.after.plan_duration_days, c.id, sc.project_id]
         );
       }
+      // `AND status <> 'APPLIED'` chặn ghi đè trạng thái khi một request song song
+      // đã apply scenario này trước đó.
+      // Vân tay lịch **sau khi ghi**: rollback sẽ so với nó. Không có thứ này thì
+      // apply A, apply B, rồi rollback A sẽ khôi phục ảnh chụp của A đè lên thay
+      // đổi của B — mất lịch mà không có dấu vết. Đo được bằng
+      // `tests/e2e/concurrency.mjs`. Đây là cùng chốt mà `restoreBaseline()` của
+      // `lib/baseline.js` dùng cho kịch bản trụ cột, chỉ đưa sang đây vì
+      // schedule-compress tự phục hồi từ `applied_before` chứ không qua baseline.
+      const afterFingerprint = scheduleFingerprint(await readScheduleRows(client, sc.project_id));
       const r = await client.query(
-        `UPDATE schedule_scenarios SET status = 'APPLIED', applied_at = now(), result = $1 WHERE id = $2 RETURNING *`,
-        [JSON.stringify({ ...out, cal: undefined, applied_before: changes, applied_at: new Date().toISOString() }), sc.id]
+        `UPDATE schedule_scenarios SET status = 'APPLIED', applied_at = now(), result = $1
+         WHERE id = $2 AND status <> 'APPLIED' RETURNING *`,
+        [JSON.stringify({
+          ...out,
+          cal: undefined,
+          applied_before: changes,
+          applied_at: new Date().toISOString(),
+          schedule_fingerprint_after: afterFingerprint,
+        }), sc.id]
       );
+      if (!r.rows[0]) throw httpError(409, 'already applied — rollback first to re-run');
       return { scenario: r.rows[0], changed: changes.length, days_saved: out.days_saved, calendar_end: out.calendar_end };
     });
     const { emitDecision } = await import('../lib/events.js');
@@ -225,14 +274,29 @@ router.post('/schedule-scenarios/:id/apply', ...ENTERPRISE, async (req, res) => 
     await emitWebhook(req.user.tenant_id, 'compression.applied', {
       scenario_id: Number(sc.id), project_id: sc.project_id, changed_items: changes.length,
     });
+    // Auto-notify the crew that must move faster: proposer + project PM/PMO.
+    try {
+      const { notifyMany } = await import('../services/notify.js');
+      const crew = await db.prepare(
+        `SELECT DISTINCT u.id FROM project_members m JOIN users u ON u.id = m.user_id
+         WHERE m.project_id = ? AND (u.role = 'admin' OR u.is_ceo OR u.role IN ('pm', 'pmo'))`
+      ).allAsync(sc.project_id);
+      const ids = [...new Set([...crew.map((u) => u.id), sc.created_by].filter(Boolean))];
+      await notifyMany(ids, {
+        tenantId: req.user.tenant_id, projectId: sc.project_id,
+        title: `Đã Apply timeline mới (${sc.name}): −${out.days_saved} ngày, ${changes.length} hạng mục`,
+        body: `CEO/Admin vừa duyệt scenario #${sc.id} → mục tiêu ${target}. Các ban kiểm tra hạng mục được giao và đẩy nhanh tiến độ.`,
+        severity: 'warning', resourceType: 'schedule_scenario', resourceId: Number(sc.id),
+      });
+    } catch {}
     res.json(result);
   } catch (e) {
-    res.status(e.status || 500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 
 // POST /api/schedule-scenarios/:id/rollback — restore the exact before-values.
-router.post('/schedule-scenarios/:id/rollback', ...ENTERPRISE, async (req, res) => {
+router.post('/schedule-scenarios/:id/rollback', ...CAN_APPROVE, async (req, res) => {
   const db = getDb();
   const sc = await db.prepare('SELECT * FROM schedule_scenarios WHERE id = ?').getAsync(req.params.id);
   if (!sc) return res.status(404).json({ error: 'Not found' });
@@ -248,35 +312,187 @@ router.post('/schedule-scenarios/:id/rollback', ...ENTERPRISE, async (req, res) 
       fieldChanges: [{ field: 'status', from: 'APPLIED', to: 'ROLLED_BACK' }],
       note: `Rollback compression: restore ${changes.length} items`,
     }, async (client) => {
-      for (const c of changes) {
-        await client.query(
-          `UPDATE construction_schedule_items SET plan_start_date = $1, plan_end_date = $2, plan_duration_days = $3 WHERE id = $4`,
-          [c.before.plan_start_date, c.before.plan_end_date, c.before.plan_duration_days, c.id]
+      // Cùng lý do với apply: khoá project và khoá dòng scenario, để rollback không
+      // chạy đè lên một apply đang dở và để hai rollback song song không khôi phục
+      // chồng lên nhau. Ngoài ra khoá theo `project_id` khi sửa hạng mục, để một
+      // scenario của dự án này không bao giờ chạm hàng của dự án khác.
+      await lockProject(client, sc.project_id);
+      const fresh = (await client.query(
+        'SELECT status FROM schedule_scenarios WHERE id = $1 FOR UPDATE', [sc.id]
+      )).rows[0];
+      if (!fresh) throw httpError(404, 'Not found');
+      if (fresh.status !== 'APPLIED') throw httpError(409, 'only APPLIED scenarios can be rolled back');
+
+      // Lịch đã đổi kể từ lúc apply ⇒ có thay đổi của người khác nằm trong đó.
+      // Rollback lúc này sẽ xoá mất thay đổi đó, nên từ chối thay vì âm thầm ghi
+      // đè. Người dùng xử lý được: rollback hoặc apply kịch bản mới nhất trước.
+      const currentFingerprint = scheduleFingerprint(await readScheduleRows(client, sc.project_id));
+      const expected = sc.result?.schedule_fingerprint_after;
+      if (expected && currentFingerprint !== expected) {
+        throw httpError(
+          409,
+          'Schedule changed after this scenario was applied; rollback would overwrite newer data',
         );
       }
-      await client.query(`UPDATE schedule_scenarios SET status = 'ROLLED_BACK' WHERE id = $1`, [sc.id]);
+      for (const c of changes) {
+        await client.query(
+          `UPDATE construction_schedule_items SET plan_start_date = $1, plan_end_date = $2, plan_duration_days = $3 WHERE id = $4 AND project_id = $5`,
+          [c.before.plan_start_date, c.before.plan_end_date, c.before.plan_duration_days, c.id, sc.project_id]
+        );
+      }
+      const r = await client.query(
+        `UPDATE schedule_scenarios SET status = 'ROLLED_BACK' WHERE id = $1 AND status = 'APPLIED' RETURNING id`,
+        [sc.id]
+      );
+      if (!r.rows[0]) throw httpError(409, 'only APPLIED scenarios can be rolled back');
       return { ok: true };
     });
+    try {
+      const { notifyMany } = await import('../services/notify.js');
+      const crew = await db.prepare(
+        `SELECT DISTINCT u.id FROM project_members m JOIN users u ON u.id = m.user_id
+         WHERE m.project_id = ? AND (u.role = 'admin' OR u.is_ceo OR u.role IN ('pm', 'pmo'))`
+      ).allAsync(sc.project_id);
+      const ids = [...new Set([...crew.map((u) => u.id), sc.created_by].filter(Boolean))];
+      await notifyMany(ids, {
+        tenantId: req.user.tenant_id, projectId: sc.project_id,
+        title: `Đã Rollback timeline (${sc.name}): khôi phục ${changes.length} hạng mục`,
+        body: `Scenario #${sc.id} đã trả về ngày kế hoạch gốc. Các ban trở lại nhịp cũ.`,
+        severity: 'info', resourceType: 'schedule_scenario', resourceId: Number(sc.id),
+      });
+    } catch {}
     res.json({ ok: true, restored: changes.length });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    // `e.status` thay vì cứ 500: khối bên trong ném 404 (scenario biến mất giữa
+    // lúc đọc và lúc khoá) và 409 (lịch đã đổi sau khi apply ⇒ rollback sẽ xoá
+    // mất thay đổi mới hơn). Trước đây cả hai đều thành 500, tức phía giao diện
+    // không phân biệt được "bị từ chối" với "máy chủ hỏng". Route `apply` ngay
+    // phía trên đã dùng đúng cách này.
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 
 // GET /api/projects/:id/schedule-scenarios + GET /api/schedule-scenarios/:id
-router.get('/projects/:id/schedule-scenarios', ...ENTERPRISE, async (req, res) => {
+router.get('/projects/:id/schedule-scenarios', ...CAN_PROPOSE, async (req, res) => {
   const db = getDb();
   res.json(await db.prepare(
     'SELECT id, project_id, name, target_end_date, status, created_by, created_at, applied_at FROM schedule_scenarios WHERE project_id = ? ORDER BY id DESC'
   ).allAsync(req.params.id));
 });
 
-router.get('/schedule-scenarios/:id', ...ENTERPRISE, async (req, res) => {
+router.get('/schedule-scenarios/:id', ...CAN_PROPOSE, async (req, res) => {
   const db = getDb();
   const sc = await db.prepare('SELECT * FROM schedule_scenarios WHERE id = ?').getAsync(req.params.id);
   if (!sc) return res.status(404).json({ error: 'Not found' });
   if (!(await checkProjectAccess(req.user, sc.project_id))) return res.status(404).json({ error: 'Not found' });
   res.json(sc);
+});
+
+// PATCH /api/schedule-scenarios/:id — admin/CEO manages the plan.
+// {name?} renames. {target_end_date?, policy?} retargets: recomputes the
+// proposal from CURRENT rows (same honesty as preview) and resets to DRAFT.
+// APPLIED scenarios are immutable here (409 — rollback first), so approved
+// dates can never silently shift under an approval.
+router.patch('/schedule-scenarios/:id', ...CAN_APPROVE, async (req, res) => {
+  const db = getDb();
+  const sc = await db.prepare('SELECT * FROM schedule_scenarios WHERE id = ?').getAsync(req.params.id);
+  if (!sc) return res.status(404).json({ error: 'Not found' });
+  if (!(await checkProjectAccess(req.user, sc.project_id))) return res.status(404).json({ error: 'Not found' });
+  const { name, target_end_date, policy } = req.body || {};
+  const wantsRetarget = target_end_date !== undefined || policy !== undefined;
+  if (wantsRetarget && sc.status === 'APPLIED') {
+    return res.status(409).json({ error: 'already applied — rollback first to re-plan' });
+  }
+  if (name !== undefined && (typeof name !== 'string' || !name.trim() || name.length > 200)) {
+    return res.status(400).json({ error: 'name must be 1..200 chars' });
+  }
+  try {
+    let out = null;
+    let nextTarget = asDateStr(sc.target_end_date);
+    let nextPolicy = sc.policy || {};
+    if (wantsRetarget) {
+      if (target_end_date !== undefined) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(target_end_date)) return res.status(400).json({ error: 'target_end_date must be YYYY-MM-DD' });
+        nextTarget = target_end_date;
+      }
+      if (policy !== undefined) {
+        if (typeof policy !== 'object' || policy === null) return res.status(400).json({ error: 'policy must be an object' });
+        nextPolicy = {
+          min_days_floor: Number.isFinite(policy.min_days_floor) ? Math.max(0, Math.floor(policy.min_days_floor)) : 1,
+          min_pct: Number.isFinite(policy.min_pct) ? Math.min(1, Math.max(0, policy.min_pct)) : 0.5,
+        };
+        if (policy.suspensions !== undefined) {
+          if (!Array.isArray(policy.suspensions) || policy.suspensions.length > 10) {
+            return res.status(400).json({ error: 'suspensions must be an array of ≤10 {from,to}' });
+          }
+          nextPolicy.suspensions = policy.suspensions;
+        }
+        if (policy.exclude_ids !== undefined) {
+          if (!Array.isArray(policy.exclude_ids) || !policy.exclude_ids.every(Number.isInteger)) {
+            return res.status(400).json({ error: 'exclude_ids must be an array of integer item ids' });
+          }
+          nextPolicy.exclude_ids = [...new Set(policy.exclude_ids)];
+        }
+      }
+      const { rows, links } = await loadSchedule(sc.project_id);
+      out = await runCompression(db, req.user.tenant_id, rows, links, nextTarget, nextPolicy);
+    }
+    const updated = await withAudit(req, {
+      action: 'UPDATE', resourceType: 'schedule_scenario', resourceId: Number(sc.id),
+      context: { project_id: sc.project_id },
+      before: { name: sc.name, target_end_date: asDateStr(sc.target_end_date), status: sc.status },
+      after: { name: name?.trim() || sc.name, target_end_date: nextTarget, status: wantsRetarget ? 'DRAFT' : sc.status, feasible: out?.feasible },
+      fieldChanges: [
+        ...(name ? [{ field: 'name', from: sc.name, to: name.trim() }] : []),
+        ...(wantsRetarget ? [{ field: 'target_end_date', from: asDateStr(sc.target_end_date), to: nextTarget }] : []),
+      ],
+      note: wantsRetarget
+        ? `Re-plan scenario #${sc.id} → ${nextTarget}: ${out.feasible ? `khả thi (−${out.days_saved}d)` : 'không khả thi'}`
+        : `Rename scenario #${sc.id}`,
+    }, async (client) => {
+      const r = await client.query(
+        `UPDATE schedule_scenarios SET name = $1, target_end_date = $2, policy = $3,
+          result = COALESCE($4, result), status = $5, applied_at = NULL WHERE id = $6 RETURNING *`,
+        [name?.trim() || sc.name, nextTarget, JSON.stringify(nextPolicy),
+         out ? JSON.stringify({ ...out, cal: undefined, durations: undefined }) : null,
+         wantsRetarget ? 'DRAFT' : sc.status, sc.id]
+      );
+      return r.rows[0];
+    });
+    res.json(updated);
+  } catch (e) {
+    res.status(e.status || 500).json(errorBody(e));
+  }
+});
+
+// DELETE /api/schedule-scenarios/:id — admin/CEO removes a DRAFT plan.
+// Pending AI drafts pointing at it are auto-dismissed (no orphan inbox rows).
+router.delete('/schedule-scenarios/:id', ...CAN_APPROVE, async (req, res) => {
+  const db = getDb();
+  const sc = await db.prepare('SELECT * FROM schedule_scenarios WHERE id = ?').getAsync(req.params.id);
+  if (!sc) return res.status(404).json({ error: 'Not found' });
+  if (!(await checkProjectAccess(req.user, sc.project_id))) return res.status(404).json({ error: 'Not found' });
+  if (sc.status !== 'DRAFT') return res.status(409).json({ error: `only DRAFT scenarios can be deleted (status=${sc.status})` });
+  try {
+    const result = await withAudit(req, {
+      action: 'DELETE', resourceType: 'schedule_scenario', resourceId: Number(sc.id),
+      context: { project_id: sc.project_id },
+      before: { name: sc.name, target_end_date: asDateStr(sc.target_end_date), status: sc.status },
+      after: null,
+      note: `Xóa scenario #${sc.id} (${sc.name})`,
+    }, async (client) => {
+      const d = await client.query(
+        `UPDATE ai_drafts SET status = 'dismissed', decided_at = now()
+         WHERE kind = 'schedule_replan' AND status = 'pending' AND payload->>'scenario_id' = $1`,
+        [String(sc.id)]
+      );
+      await client.query('DELETE FROM schedule_scenarios WHERE id = $1', [sc.id]);
+      return { ok: true, dismissed_drafts: d.rowCount };
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(e.status || 500).json(errorBody(e));
+  }
 });
 
 export default router;

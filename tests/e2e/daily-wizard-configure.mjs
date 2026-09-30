@@ -3,16 +3,21 @@
 // {work_items, materials, manpower, acceptance} instead of {rows}. Full flow: stage →
 // configure (preview) → commit → daily_reports row. Real PG + real server.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/daily-wizard-configure.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { cleanupProjectsOnExit } from './lib-cleanup.mjs';
 const XLSX = (await import('xlsx')).default;
 
+
+// Dọn dự án thử nghiệm nếu bài dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupProjectsOnExit(['DAILY-WZ-%'], { label: 'daily-wizard-configure' });
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3107';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3107' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) });
@@ -36,7 +41,7 @@ try {
   const FP = '/tmp/daily-wizard-test.xlsx';
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(grid), '23.5.2021');
-  XLSX.writeFile(wb, FP);
+  writeFileSync(FP, XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
 
   const proj = await post('/api/projects', { code: `DAILY-WZ-${Date.now()}` });
   ok(proj.s === 201, `throwaway project (got ${proj.s})`);

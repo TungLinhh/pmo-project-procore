@@ -1,0 +1,113 @@
+name: pmo-production
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: pmo_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in the secret environment}
+      POSTGRES_DB: pmo
+      BACKUP_DB_PASSWORD: ${BACKUP_DB_PASSWORD:?Set BACKUP_DB_PASSWORD in the secret environment}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/production/00-backup-role.sh:/docker-entrypoint-initdb.d/00-backup-role.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pmo_user -d pmo"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  init:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: pmo
+      DB_USER: pmo_user
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in the secret environment}
+      APP_DB_USER: pmo_app
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in the secret environment}
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-}
+    entrypoint: ["node", "backend/src/db/init.js"]
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+
+  app:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      SKIP_DB_INIT: 1
+      PRODUCTION_ENFORCE_READINESS: 1
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?Set the public HTTPS URL}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: pmo
+      APP_DB_USER: pmo_app
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in the secret environment}
+      JWT_SECRET: ${JWT_SECRET:?Set a random secret of at least 32 characters}
+      DATA_ENC_KEY: ${DATA_ENC_KEY:?Set a base64 or hex encoded 32-byte key}
+      BACKUP_DATABASE_URL: ${BACKUP_DATABASE_URL:?Set the pmo_backup connection URL}
+      UPLOADS_DIR: /app/backend/uploads
+      BACKUP_DIR: /app/backend/data/backups
+      STORAGE_DRIVER: s3
+      S3_ENDPOINT: ${S3_ENDPOINT:?Set the S3-compatible endpoint}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:?Set the private upload bucket}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set the S3 access key}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?Set the S3 secret key}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET:-}
+      AI_MONTHLY_CAP_USD: ${AI_MONTHLY_CAP_USD:-20}
+      PG_POOL_MAX: ${PG_POOL_MAX:-10}
+    ports:
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    volumes:
+      - uploads:/app/backend/uploads
+      - backups:/app/backend/data/backups
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    # Readiness, not liveness: /api/ready really queries PostgreSQL and returns
+    # 503 when it cannot. A healthcheck on /api/health would pass while the
+    # database was dead — the process is up, so there is nothing to restart.
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+
+volumes:
+  pgdata:
+  uploads:
+  backups:

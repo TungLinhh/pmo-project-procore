@@ -3,9 +3,13 @@
 // Uses the psql binary (no extra npm deps) + node:child_process only.
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { cleanupOnExit } from './lib-cleanup.mjs';
 
+
+// Dọn dữ liệu thật nếu bài kiểm dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupOnExit(['canary-p0-01-%'], { label: 'p0-01-directives-init' });
 const URL = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
-const PSQL = 'PGPASSWORD=pmo_dev_pwd /home/linuxbrew/.linuxbrew/bin/psql -h 127.0.0.1 -p 5433 -U pmo_user -d pmo -t -A';
+const PSQL = `PGPASSWORD=${process.env.PGPASSWORD || 'pmo_dev_pwd'} ${process.env.PSQL_BIN || 'psql'} -h ${process.env.PGHOST || '127.0.0.1'} -p ${process.env.PGPORT || '5433'} -U ${process.env.PGUSER || 'pmo_user'} -d ${process.env.PGDATABASE || 'pmo'} -t -A`;
 const psql = (sql) => execSync(`${PSQL} -c "${sql.replace(/"/g, '\\"')}"`, { encoding: 'utf8' }).trim();
 
 let failures = 0;

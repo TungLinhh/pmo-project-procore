@@ -6,9 +6,10 @@
 // 4. CLIENT without server_record_id → 422. Bad progress value → 422, record untouched.
 // Run: BASE_URL=http://localhost:3000 node tests/e2e/p4-sync-apply.mjs
 import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
-const CW = '/home/vutun/pmo_project';
+const CW = fileURLToPath(new URL('../..', import.meta.url));
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); cond ? pass++ : fail++; };
 async function api(path, opts = {}) {
@@ -30,10 +31,11 @@ const AH = { Authorization: `Bearer ${adminT}`, 'Content-Type': 'application/jso
 const PH = { Authorization: `Bearer ${pmT}`, 'Content-Type': 'application/json' };
 const J = (H, b) => ({ headers: H, body: JSON.stringify(b) });
 
-// target: a real schedule item; remember original progress for restore
-const targetId = psql(`SELECT id FROM construction_schedule_items WHERE project_id = 1 LIMIT 1;`);
-const origProgress = psql(`SELECT progress_pct FROM construction_schedule_items WHERE id = ${targetId};`);
-ok(!!targetId, `target item #${targetId} (progress=${origProgress})`);
+// target: a real schedule item; remember original progress for restore.
+// The restore is NULL-safe (see below), so any row works.
+const targetId = psql(`SELECT id FROM construction_schedule_items WHERE project_id = 1 ORDER BY id LIMIT 1;`);
+const origProgress = psql(`SELECT COALESCE(CAST(progress_pct AS TEXT), '') FROM construction_schedule_items WHERE id = ${targetId};`);
+ok(!!targetId, `target item #${targetId} (progress=${origProgress || 'NULL'})`);
 
 const seed = (type, recordId, json) => psql(
   `INSERT INTO offline_sync_queue (user_id, resource_type, server_record_id, resource_json, client_timestamp) VALUES (1, '${type}', ${recordId}, '${json}', now()) RETURNING id;`
@@ -66,9 +68,15 @@ ok(badVal.status === 422, `progress 9 → 422 (got ${badVal.status})`);
 ok(Number(psql(`SELECT progress_pct FROM construction_schedule_items WHERE id = ${targetId};`)) === 0.5, 'record untouched after rejected apply');
 
 // restore + cleanup
-psql(`UPDATE construction_schedule_items SET progress_pct = ${origProgress} WHERE id = ${targetId};`);
+// NULL-safe restore: a picked row may have progress_pct = NULL, and writing an
+// empty value produced "UPDATE ... SET progress_pct =  WHERE id = ...".
+const origIsNull = origProgress === '' || origProgress === null;
+psql(origIsNull
+  ? `UPDATE construction_schedule_items SET progress_pct = NULL WHERE id = ${targetId};`
+  : `UPDATE construction_schedule_items SET progress_pct = ${origProgress} WHERE id = ${targetId};`);
 execSync(`bash backend/scripts/pg-ctl.sh psql -c "DELETE FROM offline_sync_queue WHERE resource_json::text LIKE '%progress_pct%' OR resource_type = 'teleport_coordinates' OR (resource_type = 'daily_report' AND resource_json = '{\\"notes\\": \\"x\\"}'); DELETE FROM audit_log WHERE action = 'SYNC_APPLY';"`, { encoding: 'utf8', cwd: CW });
-ok(String(psql(`SELECT progress_pct FROM construction_schedule_items WHERE id = ${targetId};`)) === String(origProgress), 'original progress restored');
+const restored = psql(`SELECT COALESCE(CAST(progress_pct AS TEXT), 'NULL') FROM construction_schedule_items WHERE id = ${targetId};`);
+ok(String(restored) === (origIsNull ? 'NULL' : String(origProgress)), `original progress restored (${restored})`);
 
 console.log(pass && !fail ? '\nALL PASS' : `\n${fail} FAILURE(S)`);
 process.exit(fail ? 1 : 0);

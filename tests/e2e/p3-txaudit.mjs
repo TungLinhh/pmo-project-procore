@@ -3,7 +3,9 @@
 // 2. business throws → no audit row (rolled back).
 // 3. audit INSERT fails (action > varchar(50)) → business row rolled back.
 // Run: node tests/e2e/p3-txaudit.mjs
+import { adminPsql } from '../tools/env.mjs';
 import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
@@ -14,17 +16,17 @@ const PG = {
   password: process.env.PGPASSWORD || 'pmo_dev_pwd',
 };
 const DBNAME = 'pmo_txatest';
+const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const FRESH_URL = `postgresql://${PG.user}:${PG.password}@${PG.host}:${PG.port}/${DBNAME}`;
 const PSQL = `PGPASSWORD=${PG.password} psql -h ${PG.host} -p ${PG.port} -U ${PG.user}`;
 const psqlDb = (db, sql) => execSync(`${PSQL} -d ${db} -t -A -c "${sql.replace(/"/g, '\\"')}"`, { encoding: 'utf8' }).trim();
-const SUPERPSQL = `psql -h /tmp -p ${PG.port} -U vutun`;
 const superpsql = (sql) => execSync(`${SUPERPSQL} -d postgres -c "${sql}"`, { encoding: 'utf8' });
 const nodeEval = (js) => execSync(`node --input-type=module -e "${js.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`')}"`,
-  { encoding: 'utf8', cwd: '/home/vutun/pmo_project', env: { ...process.env, DATABASE_URL: FRESH_URL }, timeout: 60000 });
+  { encoding: 'utf8', cwd: ROOT, env: { ...process.env, DATABASE_URL: FRESH_URL }, timeout: 60000 });
 
-superpsql(`DROP DATABASE IF EXISTS ${DBNAME};`);
-superpsql(`CREATE DATABASE ${DBNAME} OWNER ${PG.user};`);
-execSync('node backend/src/db/init.js', { encoding: 'utf8', cwd: '/home/vutun/pmo_project', env: { ...process.env, DATABASE_URL: FRESH_URL }, timeout: 180000 });
+adminPsql(`DROP DATABASE IF EXISTS ${DBNAME};`);
+adminPsql(`CREATE DATABASE ${DBNAME} OWNER ${PG.user};`);
+execSync('node backend/src/db/init.js', { encoding: 'utf8', cwd: ROOT, env: { ...process.env, DATABASE_URL: FRESH_URL }, timeout: 180000 });
 
 const PRE = `
   import { txAudit } from './backend/src/lib/with-audit.js';
@@ -78,7 +80,7 @@ nodeEval(PRE + `
 `);
 ok(psqlDb(DBNAME, "SELECT before IS NOT NULL AND after IS NOT NULL FROM audit_log WHERE note = 'tx-probe-defer';") === 't', 'deferred before/after land in audit row');
 
-superpsql(`DROP DATABASE IF EXISTS ${DBNAME};`);
+adminPsql(`DROP DATABASE IF EXISTS ${DBNAME};`);
 ok(true, 'scratch database dropped');
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');

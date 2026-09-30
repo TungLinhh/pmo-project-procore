@@ -1,14 +1,19 @@
 // P1-06: list filters honored; business-processes list works; Approval queues hit real endpoints.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p1-06-filters.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn, execSync } from 'node:child_process';
+import { cleanupProjectsOnExit } from './lib-cleanup.mjs';
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3206';
-const PSQL = 'PGPASSWORD=pmo_dev_pwd /home/linuxbrew/.linuxbrew/bin/psql -h 127.0.0.1 -p 5433 -U pmo_user -d pmo -t -A';
+const PSQL = `PGPASSWORD=${process.env.PGPASSWORD || 'pmo_dev_pwd'} ${process.env.PSQL_BIN || 'psql'} -h ${process.env.PGHOST || '127.0.0.1'} -p ${process.env.PGPORT || '5433'} -U ${process.env.PGUSER || 'pmo_user'} -d ${process.env.PGDATABASE || 'pmo'} -t -A`;
 const psql = (sql) => execSync(`${PSQL} -c "${sql.replace(/"/g, '\\"')}"`, { encoding: 'utf8' }).trim();
 
+
+// Dọn dự án thử nghiệm nếu bài dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupProjectsOnExit(['P1-06-%', 'P106-%'], { label: 'p1-06-filters' });
 const stamp = Date.now();
 const pcode = `P1-06-${stamp}`;
 psql(`INSERT INTO projects (tenant_id, code, name_vi) VALUES (1, '${pcode}', 'filter test') ON CONFLICT DO NOTHING;`);
@@ -32,7 +37,7 @@ const invid = psql(`INSERT INTO invoices (contract_id, invoice_no, amount, statu
 const prid = psql(`INSERT INTO payment_requests (invoice_id, request_no, amount, status) VALUES (${invid}, 'PR-P106-${stamp}', 1000, 'PENDING') RETURNING id;`).split('\n')[0];
 
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3206' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) });
   const { token } = await login.json();

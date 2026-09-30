@@ -7,7 +7,12 @@ const { getDb, closeDb } = await import('../../backend/src/db/index.js');
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
-const AR_DIR = process.env.BTE_AR_DIR || '/mnt/c/Users/vutun/Downloads/2020.03.11 MEP-BTE-PCR/2020.01.11 MEP-BTE-PCR/TIẾN ĐỘ THANH TOÁN A_B';
+const AR_DIR = process.env.BTE_AR_DIR || '';
+const { existsSync } = await import('node:fs');
+if (!AR_DIR || !existsSync(`${AR_DIR}/1. Bãi Tràm.xlsx`)) {
+  console.log('SKIP — BTE_AR_DIR or 1. Bãi Tràm.xlsx not present');
+  process.exit(0);
+}
 
 const parsed = await parse(`${AR_DIR}/1. Bãi Tràm.xlsx`, 1);
 const kinds = parsed.sheets.map(s => `${s.sheet}:${s.kind}`);

@@ -13,6 +13,7 @@ import { withAudit } from '../lib/with-audit.js';
 import { resolveConflict } from '../lib/validation.js';
 import { checkTransition } from '../lib/transitions.js';
 import { applyClientPayload, validateSyncPayload } from '../lib/sync-apply.js';
+import { errorBody } from '../lib/error-body.js';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -82,7 +83,7 @@ router.post('/enqueue', async (req, res) => {
       if (dupe) return res.json({ ...dupe, deduped: true });
     }
     if (e && typeof e.status === 'number') return res.status(e.status).json({ error: e.message });
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 
@@ -109,17 +110,25 @@ router.post('/resolve', async (req, res) => {
         defer: true, // before/after come from the apply result, same tx
         note: `Apply offline client payload (queue #${queue_id})`,
       }, async (client) => {
+        const claim = (await client.query(
+          `UPDATE offline_sync_queue
+           SET status = 'RESOLVED', conflict_resolution = $1, superseded_at = now()
+           WHERE id = $2 AND status = 'PENDING' RETURNING *`,
+          [conflictResolution, queue_id],
+        )).rows[0];
+        if (!claim) throw { status: 409, message: 'Sync item already resolved by another request' };
         const { before, after } = await applyClientPayload(client, async (record) => {
           // Queue rows carry no project — resolve it from the server record.
+          // Fail closed: a record without a project_id would otherwise skip the
+          // only project gate this path has and still be applied.
           const projectId = record.project_id ?? null;
-          if (projectId && !(await checkProjectAccess(req.user, projectId))) {
+          // PHẢI truyền `client`: nếu không, hàm lấy connection thứ hai từ pool trong
+      // lúc transaction đang giữ một → đủ 10 request song song là chết pool
+      // (PG_POOL_MAX=10, timeout 10s). Xem `lib/project-access.js`.
+      if (!projectId || !(await checkProjectAccess(req.user, projectId, client))) {
             throw { status: 404, message: 'Not found' };
           }
-        }, item);
-        await client.query(
-          `UPDATE offline_sync_queue SET status = 'RESOLVED', conflict_resolution = $1, superseded_at = now() WHERE id = $2`,
-          [conflictResolution, queue_id]
-        );
+        }, claim);
         return { value: after, before, after };
       });
       return res.json({ ok: true, winner, comparison, conflict_resolution: conflictResolution, applied });
@@ -132,16 +141,40 @@ router.post('/resolve', async (req, res) => {
         after: item.resource_json,
         note: `Resolve sync conflict (winner=SERVER) for queue #${queue_id}`,
       }, async (client) => {
-        await client.query(`UPDATE offline_sync_queue SET status = 'RESOLVED', conflict_resolution = $1, superseded_at = now() WHERE id = $2`, [conflictResolution, queue_id]);
+        const claimed = await client.query(
+          `UPDATE offline_sync_queue
+           SET status = 'RESOLVED', conflict_resolution = $1, superseded_at = now()
+           WHERE id = $2 AND status = 'PENDING' RETURNING id`,
+          [conflictResolution, queue_id],
+        );
+        if (!claimed.rows[0]) throw { status: 409, message: 'Sync item already resolved by another request' };
         return { ok: true };
       });
     } else {
-      await db.prepare(`UPDATE offline_sync_queue SET status = 'RESOLVED', conflict_resolution = ?, superseded_at = now() WHERE id = ?`).runAsync(conflictResolution, queue_id);
+      // Same transaction + audit as the CLIENT branch. This used to claim the
+      // queue row on a bare pooled connection, so a resolution could commit with
+      // no audit row at all.
+      await withAudit(req, {
+        action: 'SYNC_RESOLVE', resourceType: item.resource_type, resourceId: item.server_record_id || null,
+        context: { queue_id, winner, comparison: comparison.winner },
+        before: { status: 'PENDING' },
+        after: { status: 'RESOLVED', conflict_resolution: conflictResolution },
+        note: `Resolve sync conflict (winner=${winner}) for queue #${queue_id}`,
+      }, async (client) => {
+        const claimed = await client.query(
+          `UPDATE offline_sync_queue
+           SET status = 'RESOLVED', conflict_resolution = $1, superseded_at = now()
+           WHERE id = $2 AND status = 'PENDING' RETURNING id`,
+          [conflictResolution, queue_id],
+        );
+        if (!claimed.rows[0]) throw { status: 409, message: 'Sync item already resolved by another request' };
+        return { value: { ok: true } };
+      });
     }
     res.json({ ok: true, winner, comparison, conflict_resolution: conflictResolution });
   } catch (e) {
     if (e && typeof e.status === 'number') return res.status(e.status).json({ error: e.message });
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 

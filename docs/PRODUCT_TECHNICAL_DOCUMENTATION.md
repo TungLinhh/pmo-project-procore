@@ -1,6 +1,6 @@
 # PMO MVP — Product Technical Documentation
 
-> **Version**: 0.10.0 · **Last updated**: 2026-09-16 · **Audience**: Engineers, technical PMs, integrators
+> **Version**: 0.11.0 · **Last updated**: 2026-09-23 · **Audience**: Engineers, technical PMs, integrators
 >
 > This document is the **single source of truth** for the PMO MVP. It replaces the previous collection of scattered docs (ARCHITECTURE, CODEBASE, USER_GUIDE, OPERATIONS, etc.). UML diagrams referenced from `docs/srs/`.
 
@@ -48,7 +48,7 @@ PMO MVP is a **construction project management system** built for a multi-zone c
 | **Admin** | System config, user management, all projects | All screens |
 | **CEO** | Portfolio overview, KPI trends, approve high-value payments | Control Center, Dashboard, Payment |
 | **PM** | Manage assigned project: schedule, issues, materials | Control Center, Issues, Manpower, Materials |
-| **PMO** | Cross-project monitoring, KPI targets, governance | Control Center, Audit Log, KPI |
+| **PMO** | Monitor assigned projects, KPI targets and governance | Control Center, assigned project views, KPI |
 | **Site engineer** | Daily reports (manpower, photos, weather), field issues | Field Home, Daily Report, Photo Upload |
 | **Procurement** | Material submittals, contracts, vendor management | Materials, Material Submittal, Master Data |
 | **Accounting** | Payment chain (contract → invoice → request → payment) | Payment, Contracts, Invoices |
@@ -75,8 +75,8 @@ PMO MVP is a **construction project management system** built for a multi-zone c
 │  Vite + React 19 + React Router 7                                   │
 │  ─ App.jsx (Router + Auth)                                          │
 │  ─ HqShell (CEO/PM/PMO)  ─ FieldShell (Site)                        │
-│  ─ 12 HQ screens + 4 Field screens + 3 Governance screens           │
-│  ─ 10 reusable components                                           │
+│  ─ các màn hình nghiệp vụ, governance và field                   │
+│  ─ các component dùng chung                                        │
 └──────────────────┬──────────────────────────────────────────────────┘
                    │ HTTP (Bearer token in localStorage)
                    │ XHR/fetch
@@ -84,8 +84,8 @@ PMO MVP is a **construction project management system** built for a multi-zone c
 ┌─────────────────────────────────────────────────────────────────────┐
 │                  Express 4 Backend (Node.js 20)                      │
 │  backend/src/index.js (130 LOC composition)                          │
-│  ─ 22 route files in routes/                                        │
-│  ─ 3 lib helpers (auth, tx, with-audit) + 6 utility libs            │
+│  ─ 40 route files in routes/                                        │
+│  ─ auth, transaction, audit, permissions và các lib nghiệp vụ       │
 │  ─ 1 service layer (ingest/, notify.js, export.js)                  │
 │  ─ static SPA serving in production (dist/)                         │
 └─────┬─────────────────────┬──────────────────┬──────────────────────┘
@@ -94,7 +94,7 @@ PMO MVP is a **construction project management system** built for a multi-zone c
 ┌─────────────┐  ┌──────────────────┐  ┌─────────────────┐
 │ PostgreSQL  │  │ Local FS         │  │ Background jobs │
 │ 16 (raw pg) │  │ data/uploads/    │  │ (setInterval)   │
-│ 43 tables   │  │ (Excel, photos)  │  │ TVGS escalation │
+│ 72 tables   │  │ (Excel, photos)  │  │ TVGS escalation │
 └─────────────┘  └──────────────────┘  └─────────────────┘
 ```
 
@@ -102,7 +102,7 @@ PMO MVP is a **construction project management system** built for a multi-zone c
 
 | Choice | Why |
 |--------|-----|
-| **PostgreSQL (raw `pg`)** | Schema is mature (51 tables). Raw SQL gives full control over CTEs, window functions, `RETURNING`, `ON CONFLICT`. |
+| **PostgreSQL (raw `pg`)** | Schema is mature (72 tables). Raw SQL gives full control over CTEs, window functions, `RETURNING`, `ON CONFLICT`. |
 | **Express (not Fastify/Nest)** | Team familiarity, middleware ecosystem, simple. ~3k req/s is sufficient. |
 | **React + Vite (not Next.js)** | SPA with role-based routing; no SSR needed (internal tool). Vite gives fast dev loop + small bundle. |
 | **JWT + rotating refresh** | Stateless access (24h) + opaque single-use refresh (30d) + denylist. No Redis needed on one server. |
@@ -152,9 +152,9 @@ HTTP request
 ```
 backend/
 ├── src/
-│   ├── index.js                # Express composition (24 routers + serves SPA + safe shutdown)
-│   ├── lib/                    # 18 helpers — see §4.2
-│   ├── routes/                 # 26 files — see §4.4
+│   ├── index.js                # Express composition (40 route modules + serves SPA + safe shutdown)
+│   ├── lib/                    # các helper/module nghiệp vụ — xem §4.2
+│   ├── routes/                 # các router theo domain — xem §4.4
 │   ├── db/
 │   │   ├── index.js            # Single Pool, NUMERIC→number, upsert helper
 │   │   ├── migrate.js          # checksum ledger runner
@@ -162,7 +162,7 @@ backend/
 │   └── services/
 │       ├── notify.js           # notify(user, payload), notifyMany(...) (in_app/email/zalo)
 │       ├── export.js           # CSV export
-│       └── ingest/             # 12 parsers — see §9
+│       └── ingest/             # các parser Excel — xem §9
 ├── drizzle/                    # SQL migrations
 └── scripts/
     └── pg-ctl.sh               # local PG start/stop/backup (WSL/Linux)
@@ -187,12 +187,12 @@ frontend/
 
 ## 3. Data Model
 
-### 3.1 Tables (51 total)
+### 3.1 Tables (72 total on the current schema)
 
 **Core (multi-tenant base)**
 - `tenants` — top-level org (`hbg = HBG Construction`)
 - `users` — login accounts: `role` + `is_ceo` flag, bcrypt `password_hash`, nullable `department_id`
-- `projects` — real projects only (`BTE-WP4-HBC`, `HBG-LVK-BCTH`; placeholder seeds removed), nullable `department_id`
+- `projects` — real projects loaded by the demo/pilot pipeline; `BTE-WP4-HBC` is the primary demo project, nullable `department_id`
 - `zones` — sub-areas within a project (`BOH`, `BPV`, `HPV-1BR`, etc.)
 - `departments` — flat list (`KT`, `TC`, `AT`, `VP`); chain scope, no nesting yet
 - `approval_chains` — `(department_id NULL=default, resource_type)` → `levels` JSONB (max 5, roles from matrix)
@@ -206,18 +206,18 @@ frontend/
 - `rfa_log` — Request For Approval events
 
 **Shop drawings**
-- `shop_drawings` — drawing records with **L1-L5 level columns** (`bql_l1_response`..`bql_l5_response`, `_date`, `_comment`), `status`, `notes` (offline sync), `planned_submit_date`, `actual_submit_date`. Effective levels come from `approval_chains`, not the columns.
+- `shop_drawings` — drawing records with **L1-L5 level columns** (`bql_l1_response`..`bql_l5_response`, `_date`, `_comment`), `status`, `notes` (offline sync), `planned_submit_date`, `actual_submit_date`, and the as-built tail (`as_built_status`, `as_built_at`). Effective levels come from `approval_chains`, not the columns.
 
 **Materials**
 - `materials` — material catalog per project/zone (`material_code`, `progress_pct`, 4 request/delivery dates)
-- `material_submittals` — submittal workflow with **TVGS** (`supervisor_approval_days=3`, `sla_deadline`, `supervisor_deadline`, `escalated_at`)
+- `material_submittals` — submittal workflow with **TVGS** (`supervisor_approval_days=3`, `sla_deadline`, `supervisor_deadline`, `escalated_at`) and physical-sample evidence (`physical_sample_status`)
 - `vendors` / `suppliers` / `subcontractors` / `cost_codes` / `workers` / `teams` / `resources` — master data
 
 **Payments (4-step chain)**
 - `contracts` — contract with vendor (`amount`, `retention_pct`)
 - `invoices` — invoice against contract
-- `payment_requests` — request to pay invoice (status: PENDING → APPROVED → PAID, REJECTED → DRAFT/PENDING)
-- `payments` — actual payment record (bank ref, paid_date)
+- `payment_requests` — request to pay invoice (status: PENDING → APPROVED → PAID, REJECTED → DRAFT/PENDING) with retention tracking (`retention_status`, release date/amount)
+- `payments` — actual payment record (bank ref, paid_date, retention held/released)
 - `ar_contracts` + `ar_lines` — receivables from HSTT/MPM files (`kind`: invoice/payment/dossier)
 
 **Auth sessions**
@@ -227,7 +227,8 @@ frontend/
 **Daily reports (field)**
 - `daily_reports` — header (`report_date`, `weather_am/pm`, `prepared_by`, counters, `notes` for offline sync)
 - `daily_work_items` — tasks done today
-- `daily_manpower` — workers count by role
+- `daily_manpower` — labor or equipment actuals by role (`kind= labor|equipment`)
+- `work_item_productivity` — planned/actual output and headcount by canonical work item, period, role and kind; upsert key makes reruns idempotent
 - `daily_materials` — materials used
 - `daily_acceptance` — accepted items
 - `daily_safety` — safety incidents
@@ -240,8 +241,9 @@ frontend/
 - `issues` — issue tracker (`severity`, `owner_user_id`, `project_id`, `status`)
 - `directives` — CEO/PMO directives on issues (`notify_to_user_ids[]`, `from_user_id`)
 - `audit_log` — universal audit trail (JSONB `before/after/context/field_changes`, written in the same tx as the business change)
-- `notifications` — in-app + email/zalo results (`read_at`, `severity`, `resource_type`)
 - `notifications` — in-app + email notifications (`read_at`, `severity`, `resource_type`)
+- `attention_digest_runs` — idempotent daily overdue digest delivery ledger (`tenant_id`, `user_id`, `digest_date`)
+- `qa_inspections` — optional QA/QC extension pillar (OPEN → FAILED/PASSED)
 - `offline_sync_queue` — field offline queue
 - `generic_sheets` — catch-all for unknown doc types
 - `business_processes` + `business_process_steps` — BP templates (`process_id`, `ordinal`, `name_vi`, `content_vi`)
@@ -258,7 +260,7 @@ frontend/
 | `master_status` | `ACTIVE, INACTIVE, CLOSED` | projects, contracts |
 | `notification_channel` | `in_app, email` | notifications |
 | `notification_status` | `pending, sent, delivered, failed` | notifications |
-| `user_role` | `admin, ceo, pm, pmo, site, procurement, accounting, bql` | users (note: `ceo` is also `is_ceo=true`) |
+| `user_role` | `admin, pm, pmo, site, technical, procurement, accounting, data_admin, editor, viewer` | users (CEO is `role=pmo` + `is_ceo=true`) |
 
 ### 3.3 Schema migrations
 
@@ -293,6 +295,10 @@ Located in `backend/drizzle/`, applied **exactly once** via the `schema_migratio
 | `9997_batch_intake.sql` | `relative_path`, `skip_reason` on uploads |
 | `9998_align_schema_with_routes.sql` | Route-driven patches (must run after `9999`: explicit order, not alphabetical) |
 | `9999_add_issues_table.sql` | `issues` + `daily_infos` |
+| `9999am_space_bunny_fallback.sql` | OpenRouter chat fallback route `stealth/space-bunny-alpha` (rank 40) |
+| `9999an_work_item_productivity.sql` | Work-item norm/actual productivity ledger + RLS (rank 41) |
+| `9999w_task10_trust.sql` | Task 10 trust: `users.locale/sso_subject/sso_issuer`, `sso_configs`, `pdpl_consents`, `pdpl_requests` + RLS (rank 24) |
+| `9999x_task10_colwidth.sql` | Task 10: `workers.phone→varchar(128)`, `users.zalo_user_id→varchar(256)` cho ciphertext (rank 25) |
 
 Sequences are resynced once at boot (`init.js`); inserts are single round-trip (no per-INSERT `setval`).
 
@@ -338,7 +344,7 @@ Sequences are resynced once at boot (`init.js`); inserts are single round-trip (
 
 ### 4.1 Composition (`src/index.js`)
 
-Pure composition layer. Mounts 24 routers + serves SPA in production. Sockets are tracked so `SIGTERM`/`SIGINT` always terminate (lingering keep-alive/half-open connections are destroyed after 2s; 10s force-exit).
+Pure composition layer. Mounts 40 route modules + serves SPA in production. Sockets are tracked so `SIGTERM`/`SIGINT` always terminate (lingering keep-alive/half-open connections are destroyed after 2s; 10s force-exit).
 
 ```js
 import express from 'express';
@@ -408,7 +414,7 @@ const result = await db.upsert('projects', {
 // → INSERT ... ON CONFLICT (tenant_id, code) DO UPDATE SET ...
 ```
 
-**Helper: `convertSql`**. Detects `?` placeholders and converts to `$1, $2, ...` for `pg`. Skips if SQL already has `$N` (avoids double-conversion).
+**Helper: `convertSql`**. Detects `?` placeholders and converts to `$1, $2, ...` for `pg`. SQL that mixes `?` and `$N` is rejected before binding, rather than silently binding the wrong argument. `getAsync()` places `LIMIT 1` before a `FOR UPDATE` clause and ignores trailing semicolons.
 
 ### 4.3 Database (`src/db/`)
 
@@ -416,7 +422,7 @@ const result = await db.upsert('projects', {
 - **`migrate.js`** — checksum ledger (`schema_migrations`), drift refusal, adoption
 - **`init.js`** — migrate + unique indexes + sequence resync + seeds (tenant, admin, BTE, zones, departments)
 
-### 4.4 Routes (26 files)
+### 4.4 Routes (hiện tại theo inventory)
 
 | File | Mount | Endpoints | Purpose |
 |------|-------|-----------|---------|
@@ -441,9 +447,14 @@ const result = await db.upsert('projects', {
 | `upload.js` | `/api/upload`, `/api/uploads` | `POST /` (multipart), `GET /` | Upload Excel, list uploads |
 | `wizard.js` | `/api/wizard*` | (see code) | 4-step Excel ingest wizard (analyze → map → commit → report) |
 | `otd.js` | `/api/projects/:id/otd` | `GET /?grace_days=0` | OTD KPI: on-time / late / total / by_zone / 6mo trend |
-| `jobs.js` | `/api/jobs` | `POST /escalate-tvgs`, `GET /escalate-tvgs/status` | TVGS escalation trigger + status |
+| `jobs.js` | `/api/jobs` | `GET /attention`, `POST /overdue-digest`, `GET /overdue-digest/status` | Unified overdue Attention view and idempotent daily digest |
 | `approval-chains.js` | `/api/approval-chains` | `GET /`, `POST /`, `DELETE /:id` | Chain config per (dept, resource) — admin/CEO |
 | `admin.js` | `/api/admin` | `GET /users`, `PATCH /users/:id` | User list (no hash) + department assign — admin/CEO |
+| `sso.js` | `/api/auth/sso` | `POST /start`, `POST /callback`, `POST /mfa/verify-sso`, `GET /discover` | SSO OIDC IdP ngoài (task 10): JSON-only, PKCE, tôn trọng MFA |
+| `qa.js` | `/api` | `GET/POST /projects/:id/qa-inspections`, `PATCH /qa-inspections/:id` | QA/QC extension pillar |
+| `pillar-scenarios.js` | `/api` | `POST /projects/:id/pillar-scenarios/simulate`, `POST /pillar-scenarios/:id/apply`, `POST /pillar-scenarios/:id/rollback` | CTL-01→06, including priority-scoped CTL-02 and AR-cashflow CTL-04 |
+| `export.js` | `/api/export` | `GET /project-report.xlsx`, `GET /project-report.html` | Bilingual workbook and authenticated browser-print report; exports are audited and rate-limited |
+| `privacy.js` | `/api/me` | `GET /privacy`, `POST /privacy/consents`, `GET /privacy/export`, `POST /privacy/requests`, `PATCH /privacy/profile`, `GET/DELETE /sso` | PDPL self-service (task 10): consents, export, DSR, unlink SSO |
 
 **Note**: Many routes use `Router({ mergeParams: true })` because they're mounted under `/api/projects/:id/...` and need `req.params.id` to be visible inside the sub-router. **This is the #1 source of "missing param" bugs** — never forget it.
 
@@ -469,7 +480,7 @@ export async function notify(req, userId, { title, body, severity, resourceType,
 
 Note: **no `link` or `is_read` columns**. Use `read_at IS NULL` for unread check, `resource_type` + `resource_id` for navigation target.
 
-#### `services/ingest/` (12 parsers + `failures.js` + `index.js` router)
+#### `services/ingest/` (các parser + `failures.js` + `index.js` router)
 
 | File | Doc type |
 |------|----------|
@@ -502,8 +513,8 @@ Each parser: `parse(filePath, …) → { sheets[] }` → `commit(parsed, …) �
   - `/hq/*` — HQ shell (CEO, PM, PMO, admin, procurement, accounting)
   - `/field/*` — Field shell (site)
   - `/governance/*` — Audit + MasterData
-  - `/audit` — Audit log
-  - `/otd` — OTD KPI page
+  - `/hq/audit` — Audit log
+  - `/hq/otd` — OTD KPI page
 
 ### 5.2 Shells
 
@@ -528,12 +539,14 @@ Each parser: `parse(filePath, …) → { sheets[] }` → `commit(parsed, …) �
 | `Issues.jsx` | `/hq/issues` | Issue list with filters |
 | `IssueDetail.jsx` | `/hq/issues/:id` | Issue detail + directive form |
 | `Materials.jsx` | `/hq/materials` | Material catalog |
-| `Manpower.jsx` | `/hq/manpower` | Manpower rollup (4 tabs: Workers/Machinery/Teams/Suppliers) |
+| `Manpower.jsx` | `/hq/manpower` | Manpower rollup, weekly plan/loading và productivity theo work item |
 | `Payment.jsx` | `/hq/payment` | 4-step payment chain UI |
 | `OTDPage.jsx` | `/hq/otd` | OTD KPI (on-time / late / by_zone / trend) |
 | `NotificationCenter.jsx` | `/hq/notifications` | All notifications with filters (in-app) |
 | `ReviewQueue.jsx` | `/hq/uploads` | Staged-file review queue + generic rows viewer |
 | `ChainConfig.jsx` | `/hq/approval-chains` | Chain editor + user↔department assignment |
+| `DataSecurity.jsx` | `/hq/data-security` | (task 10, admin/CEO) SSO IdP config + encryption status + DSR queue + consent register |
+| `Security.jsx` | `/hq/security` | Password + MFA + SSO link + PDPL self-service (task 10: 4 sections, VI/EN) |
 
 ### 5.4 Field screens (4)
 
@@ -548,7 +561,7 @@ Each parser: `parse(filePath, …) → { sheets[] }` → `commit(parsed, …) �
 
 | File | Route | Purpose |
 |------|-------|---------|
-| `AuditLog.jsx` | `/audit` | Audit log with filters + CSV export |
+| `AuditLog.jsx` | `/hq/audit` | Audit log with filters + CSV export |
 | `MasterDataList.jsx` | `/hq/master-data` | List vendors/subcontractors/departments/… |
 | `MasterDataEdit.jsx` | `/hq/master-data/edit` | Create form |
 | `Approval.jsx` | `/hq/approval` | Pending approvals hub (chain-aware shop approve) |
@@ -558,7 +571,8 @@ Each parser: `parse(filePath, …) → { sheets[] }` → `commit(parsed, …) �
 
 | File | Purpose |
 |------|---------|
-| `Login.jsx` | Email/password + 7 demo chips |
+| `Login.jsx` | Email/password + SSO button + 7 demo chips (VI/EN toggle) |
+| `SsoCallback.jsx` | `/sso/callback` | (task 10) IdP code→token exchange, MFA-pending handoff |
 | `BellDropdown.jsx` | Notification bell with unread badge + panel |
 | `ProjectPicker.jsx` | Reusable project selector (replaces `<select>`) |
 | `ProjectOverview.jsx` | (also a screen) |
@@ -639,6 +653,47 @@ Auto-includes `Authorization: Bearer <token>` from `localStorage.pmo_token`.
 - `POST /api/me/password {old_password, new_password}` (≥10 chars) — clears flag, bumps `token_version`, revokes refresh rows.
 - `POST /api/admin/users/:id/reset-password` (admin/CEO) — one-time temp (returned once), sets `must_change_password`, kills sessions, audit-logged.
 - Login with flag → `403 PASSWORD_CHANGE_REQUIRED` **with tokens** (so the change call authenticates); `requireAuth` gates everything else until changed. Login screen branches to the change form automatically.
+
+### 6.2c SSO via external IdP (v0.11.0, SRS §6)
+
+Generic OIDC (any IdP with discovery): `POST /api/auth/sso/start {email}` →
+`{auth_url}` (PKCE S256, state = signed JWT carrying the verifier, no server
+storage) → browser to IdP → frontend `/sso/callback?code&state` → `POST
+/api/auth/sso/callback` → code exchange + userinfo email → match by
+`(tenant, email)` → link `users.sso_subject` on first success. Unknown email +
+`auto_provision` → creates SSO-only user (`password_hash NULL`, least-privilege
+`default_role`, admin assigns projects later); otherwise 403. Changed subject →
+403 (admin unlinks via `DELETE /api/me/sso`, then retry). MFA-enabled users get
+`401 MFA_REQUIRED + sso_pending` → `POST /api/auth/sso/mfa/verify-sso`.
+Per-tenant config `PUT /api/admin/sso` (admin/CEO): issuer, client_id,
+secret_env (secret lives ONLY in server env, never DB; `ALLOW_SSO_INLINE_SECRET=1`
+memory hatch is test-only), enabled, auto_provision, default_role.
+`POST /api/admin/sso/test` checks discovery without secrets. Login screen has
+an SSO button; `/hq/security` shows link status.
+
+### 6.2d Column encryption + PDPL (v0.11.0, SRS NFR Bảo mật)
+
+- **At rest**: AES-256-GCM (`lib/crypto.js`, zero-dep, `DATA_ENC_KEY` =
+  base64-32B or 64-hex). Covered: `users.mfa_secret`, `users.zalo_user_id`,
+  `workers.phone`, `vendors.contact` — `enc:v1:` prefix, legacy plaintext
+  dual-read, random IV. No key → plaintext + warn (dev only); prod must set
+  the key (`GET /api/admin/security-status` reports it). `vendors.tax_id`
+  stays plaintext deliberately (pg_trgm ERP matching + byte-stable ledger;
+  protected by RBAC/RLS instead). Ciphertext needs wider columns (migration
+  `9999x`: phone→128, zalo→256).
+- **In transit**: `nosniff` + `same-origin` Referrer-Policy + `DENY` framing
+  on every response; HSTS only when `proto=https`. TLS itself terminates at
+  the reverse proxy (see DOCKER.md).
+- **PDPL** (policy `2026-09-v1`): consents per purpose (`account` required,
+  `notify`, `analytics` opt-in; withdrawing `notify` also disables both
+  channels) — `GET /api/me/privacy`, `POST /api/me/privacy/consents`;
+  access right — `GET /api/me/privacy/export` (never leaks hashes/secrets);
+  rectify — `PATCH /api/me/privacy/profile {name}`; erasure — `POST
+  /api/me/privacy/requests {type: ERASE}` → admin queue `GET /api/admin/dsr`
+  → `POST /api/admin/dsr/:id/resolve {DONE|REJECTED}` (ERASE+DONE =
+  irreversible anonymization, sessions killed, cannot erase the last admin;
+  audit kept). Self-service UI in `/hq/security`, register + queue in
+  `/hq/data-security` (admin/CEO).
 
 ### 6.3 Permission matrix
 
@@ -785,7 +840,8 @@ Provider-switchable semantic search + SLA watcher, human-in-the-loop throughout.
 
 ```
 provider routing (ai_provider_configs: purpose × provider/model/key-env/priority)
-  → chat/embed adapters (openai|anthropic|google, native fetch, AI_MOCK=1 shim)
+  → chat/embed adapters (openai|anthropic|google|openrouter, native fetch, AI_MOCK=1 shim)
+  → OpenRouter demo order: Nemotron first, `stealth/space-bunny-alpha` second
   → pgvector index (ai_embeddings, HNSW, per-model rows, backfill job)
   → permission-first retrieval (tenant + membership BEFORE top-k)
   → ask (cited Vietnamese answers, no-data honesty) | watcher → ai_drafts → approve
@@ -794,7 +850,9 @@ provider routing (ai_provider_configs: purpose × provider/model/key-env/priorit
 - Keys in env only (`OPENAI_API_KEY` etc.); DB stores env var names; missing key → 503 naming it.
 - Chat/embed routed independently (Anthropic has no embeddings → 400 at config).
 - Every call logged (`ai_calls` + monthly cap, default $20, 429 on breach).
+- OpenRouter fallback is opt-in by DB priority; a failed primary is retried, then Space Bunny uses low reasoning effort and a larger completion budget. It never bypasses citations or side-effect guards.
 - Mock adapter is semantic-preserving (hashed bag-of-words), so CI ranking tests mean something.
+- **Progress proposal (AI-EXT-01):** `POST /api/ai/progress-proposals` nhận câu tiếng Việt hoặc fields có kiểm soát; parser deterministic tạo `needs_input` hoặc `proposed` trong `ai_drafts.payload`, không ghi lịch. `GET` xem proposal theo project; `POST /:id/apply|rollback` là đường duyệt của CEO/Admin, có `Idempotency-Key`, fingerprint, stale `409`, transaction và audit. UI: tab **Cập nhật tiến độ** trong `hq/Assistant.jsx`.
 - Non-goals v1: keyword fallback, auto-send, per-ERP agents.
 
 ### 7.9 Field offline outbox (v0.8.0)
@@ -804,7 +862,7 @@ provider routing (ai_provider_configs: purpose × provider/model/key-env/priorit
 
 ### 7.10 BIM library + ERP round-trip (v0.9.0, Enterprise `bim-library` / `erp-export`)
 
-- **BIM (store-only v1)**: `POST /api/projects/:id/bim/models` (`.ifc` ≤200MB, 2GB/project quota) → content-addressed stage + `IFCBUILDINGSTOREY`/`IFCSPACE`/schema extraction (streaming, capped, `report_json`) → zone link (explicit param, filename guess, or ranked suggestions — never auto-assign). `/hq/bim` library table; viewer column honestly says "coming".
+- **BIM**: `POST /api/projects/:id/bim/models` (`.ifc` ≤200MB, 2GB/project quota) → content-addressed stage + `IFCBUILDINGSTOREY`/`IFCSPACE`/schema extraction (streaming, capped, `report_json`) → zone link (explicit param, filename guess, or ranked suggestions — never auto-assign). `/hq/bim` library table and lazy `web-ifc` viewer.
 - **ERP**: `GET /api/export/ap-ledger.csv` (byte-stable 17 cols, BOM, tenant-scoped); vendor CSV import → pg_trgm suggestions (suggest-only, threshold 0.4) → `confirm` is the only write; `erp_profiles` (secret env name only) + manual `POST /api/jobs/erp-push` (3× retry, `erp_push_log`). No auto-cron, no per-ERP API clients in v1.
 - **Incidents fixed on the way**: project-list 403 for non-admin roles (baseUrl+path trailing slash vs exact skip — normalize in middleware; `project-list-roles.mjs` locks it); `/api/erp/*` vs `/api/export/*` mount-prefix mismatch (vendor routes moved to `erp.js`); undici `text()` strips BOM (assert raw bytes).
 
@@ -860,6 +918,11 @@ GET    /projects/:id/material-submittals/pending-supervisor → list
 GET    /projects/:id/schedule-baselines              → versions
 POST   /projects/:id/schedule-baselines              → create baseline
 GET    /projects/:id/schedule-baselines/:version     → get baseline
+GET    /projects/:id/productivity                    → định mức/actual theo work item
+GET    /work-items/:id/productivity                  → các dòng của một hạng mục
+POST   /work-items/:id/productivity                  Body: period_start, period_end, role_name_vi, kind,
+                                                        planned_output, actual_output,
+                                                        planned_headcount, actual_headcount, unit?
 ```
 
 ### 8.4 OTD
@@ -956,7 +1019,45 @@ GET    /audit/export                          → CSV
 
 ```http
 GET /dashboard                                → tenant portrait { projects_active, materials_pending, ... }
-GET /dashboard/portfolio-kpi                  → cross-project rollup
+GET /dashboard/portfolio-kpi                  → cross-project rollup (6 GROUP BY queries + 10s/tenant cache, X-Cache HIT/MISS; ?fresh=1 bypasses)
+```
+
+### 8.13b Control summary (NFR task 9)
+
+```http
+GET /projects/:id/control-summary             → { schedule, shop, payments, payment_requests, materials, material_breakdown, gates, curves, health, loading }
+```
+
+Single round-trip replacing ControlCenter's 10 parallel fetches (same SQL/limits as each endpoint, byte-identical payloads; UI falls back to the 10 lẻ on error).
+Perf proof: `node tests/e2e/perf.mjs` (contract: 6 dashboard endpoints <3s with 20 projects), heavy proof 10× data in `/tmp` (not committed), UI runner + roll-up table at `/hq/ops` (`scripts/ui-verify-ops.mjs`).
+Indexes: migration `9999v` rank 23 (notably `daily_manpower(daily_report_id)` + `(project_id, status|date)` composites).
+
+### 8.20 SSO (task 10, SRS §6)
+
+```http
+POST /auth/sso/start        Body: { email } → 200 { auth_url } | 404 { error }
+POST /auth/sso/callback     Body: { code, state } → 200 { token, refresh_token, user } | 401 { error: MFA_REQUIRED, sso_pending } | 403
+POST /auth/sso/mfa/verify-sso  Body: { sso_pending, code } → 200 { token, refresh_token, user }
+GET  /admin/sso              (admin/CEO) → { config }
+PUT  /admin/sso              (admin/CEO) Body: { issuer, client_id, secret_env?, enabled?, auto_provision?, default_role?, client_secret? (hatch only) }
+DELETE /admin/sso            (admin/CEO)
+POST /admin/sso/test         (admin/CEO) Body: { issuer? } → { ok, endpoints... }
+GET  /me/sso                 (auth) → { linked, issuer }
+DELETE /me/sso               (auth) → unlink
+```
+
+### 8.21 Privacy / PDPL (task 10, SRS NFR Bảo mật)
+
+```http
+GET   /me/privacy                    (auth) → { policy_version, purposes[3], requests[] }
+POST  /me/privacy/consents           (auth) Body: { purpose: notify|analytics, granted } (account → 422)
+GET   /me/privacy/export             (auth) → personal data JSON (no hashes/secrets)
+POST  /me/privacy/requests           (auth) Body: { type: ACCESS|RECTIFY|ERASE, detail? } → 201
+PATCH /me/privacy/profile            (auth) Body: { name } → self rectify
+PUT   /me/locale                     (auth) Body: { locale: vi|en }
+GET   /admin/dsr[?status=]           (admin/CEO) → { pending, requests[] }
+POST  /admin/dsr/:id/resolve         (admin/CEO) Body: { decision: DONE|REJECTED, note?, apply? }
+GET   /admin/security-status         (admin/CEO) → { encryption, tls, sso, pdpl }
 ```
 
 ### 8.14 Upload wizard
@@ -1153,7 +1254,7 @@ cd backend && npm run init-db && cd ..
 - Applies `drizzle/9998_align_schema_with_routes.sql` (patches)
 - Applies `drizzle/9999_add_issues_table.sql`
 - Creates 7 unique indexes for `db.upsert()`
-- Seeds: tenant `hbg`, 7 users, 2 projects, 19 zones for `BTE-WP4-HBC`
+- Seeds: tenant `hbg`, 8 users, one base demo project, 19 zones for `BTE-WP4-HBC`; pilot data is loaded separately by `scripts/reconcile-pilot-data.mjs`
 
 ### 12.2 Daily dev
 
@@ -1186,7 +1287,7 @@ PGPASSWORD=pmo_dev_pwd psql -h 127.0.0.1 -p 5433 -U pmo_user -d pmo
 
 ## 13. Testing
 
-### 13.1 Suites (`tests/e2e/`, ~75 files)
+### 13.1 Suites (`tests/e2e/`, current inventory)
 
 | Suite | What it guards |
 |-------|----------------|
@@ -1293,13 +1394,20 @@ Build from `Dockerfile` (multi-stage `node:22-slim`). Env: `DATABASE_URL` (or `D
 - [x] Hash passwords (bcrypt)
 - [x] Migrations ledgered + idempotent entrypoint
 - [ ] Set real `DB_PASSWORD` (not `pmo_dev_pwd`)
-- [ ] Set strong `JWT_SECRET`
-- [ ] HTTPS via reverse proxy (nginx + Let's Encrypt)
-- [ ] Set `NODE_ENV=production`
-- [ ] Automated backups + test restore
+- [ ] Set strong `JWT_SECRET` and a 32-byte `DATA_ENC_KEY`
+- [ ] Set `APP_DB_USER`/`APP_DB_PASSWORD` to a non-superuser role without `BYPASSRLS` (or `APP_DATABASE_URL`); the request pool must not fall back to the owner URL
+- [ ] Set `BACKUP_DATABASE_URL` to a dedicated PostgreSQL role with `BYPASSRLS`; `pg_dump` never receives the password in argv
+- [ ] HTTPS via reverse proxy (nginx + Let's Encrypt); set `TRUST_PROXY=1` only when exactly one proxy is in front
+- [ ] Set `NODE_ENV=production` and `PRODUCTION_ENFORCE_READINESS=1`
+- [ ] Replace demo accounts with real users; every admin/CEO has MFA
+- [ ] Automated backups + test restore (`GET /api/admin/production-readiness` must be ready)
 - [ ] Monitor: `pm2`/`systemd`, alerts on `/api/health`
-- [ ] Replace demo accounts with real users (per-user password hashes)
-- [ ] CORS whitelist (currently open in dev)
+- [ ] CORS: set `CORS_ORIGIN` to the explicit origin list. Unset in production means same-origin only; unset in dev keeps the permissive default
+- [ ] Verify the daily digest and Attention links in the target SMTP environment
+
+The checklist is available to admin/CEO at `GET /api/admin/production-readiness`. It checks environment secrets, shared demo passwords, MFA coverage for privileged users, and whether the request database role is a superuser or bypasses RLS — without returning secret values. SSO is **out of scope** for this release: there is no `sso_enabled` gate and the public `GET /api/auth/sso/discover` route (an SSRF sink) has been removed. `ALLOW_SSO_INLINE_SECRET` must still be `0`.
+
+Spreadsheet parsing uses the maintained `@e965/xlsx` SheetJS build through the `xlsx` package alias. `lib/optional-dep.js` configures its ESM filesystem binding so staged uploads remain readable and the vulnerable legacy npm release is not used.
 
 ---
 
@@ -1393,6 +1501,7 @@ docker compose restart backend
 | 2026-09-16 | Bugfix audit P1 v0.10.2 | CompressPanel scenario list+rollback + link create/delete; HolidaysPanel tab; stale helper deletion; cron overlap guards; SSE 90s reap + Bell overlap guard/onopen reset | `93e538a` |
 | 2026-09-16 | Bugfix audit P2 v0.10.3 | optional-dep 503 guards (ssh2/aws-sdk/xlsx); guarded frontend awaits; Toast/UploadWizard/DailyReportForm timer hygiene | `11e09e4` |
 | 2026-09-16 | Bugfix audit P3 v0.10.4 | Upload canonical-prefix table; install-script audit (ssh2 optional binding tolerated, pure-JS fallback); orphan sweep — dashboard/portfolio-kpi/kpi-history kept (e2e-covered), business-process/:code wired into MasterDataList | (this commit) |
+| 2026-09-23 | Trust layer v0.11.0 | i18n VI/EN (chrome + login + security + bilingual xlsx, users.locale), PDPL consents + DSR + anonymize, AES-256-GCM column encryption + security headers, generic OIDC SSO (PKCE, env-only secret, MFA-aware), /hq/security 4 sections + /hq/data-security admin page, crypto/pdpl/sso/i18n suites + ui-verify-task10 | (uncommitted) |
 
 ### 16.1 Known limitations (v0.8.0)
 
@@ -1407,8 +1516,10 @@ docker compose restart backend
 
 ### 16.2 Remainder notes (v0.10.0)
 
-- **Storage**: seam is async (`withTempFile`/`download`/`stat`/`readBuffer`); parsers take temp paths, downloads redirect (S3) or stream (local). `getFilePath` is local-only legacy.
-- **Realtime**: `/api/stream` mounts FIRST (bare `/api` routers run header-only requireAuth on every subpath and would 401 the query-token handshake). Events: notification.created (all notify paths + TVGS), approval.decided + compression.applied (tenant admins).
+- **Storage**: seam is async (`withTempFile`/`download`/`stat`/`readBuffer`); parsers take temp paths, downloads redirect (S3) or stream (local). `getFilePath` is local-only legacy. Uploads phải nằm trên volume riêng: `uploads_volume` trong `getProductionReadiness` fail khi `UPLOADS_DIR` không tồn tại hoặc cùng `st_dev` với thư mục cha (tức nằm trong container). `scripts/storage-gc.mjs` báo cáo file không còn dòng nào tham chiếu (dry-run mặc định, `--apply` để xoá, bỏ qua file < 24h, từ chối chạy khi `STORAGE_DRIVER=s3`).
+- **Realtime**: `/api/stream` mounts FIRST (bare `/api` routers run header-only requireAuth on every subpath and would 401 the SSE handshake). Handshake dùng **vé một lần** 45s lấy từ `POST /api/stream/ticket` (header-auth), đốt qua `auth_revoked_jti` nên single-use đúng cả khi nhiều instance; `?token=` cũ trả 401. `BellDropdown` tự xin vé mới mỗi lần reconnect vì server cắt stream mỗi 90s. Events: notification.created (all notify paths + TVGS), approval.decided + compression.applied (tenant admins).
+- **Monitoring**: `/api/health` chỉ liveness (không chạm DB, có `uptime_s`); `/api/ready` query thật, trả `degraded` khi >2s và 503 khi DB chết — probe không bao giờ được trả `ok` cứng. `lib/retention.js` dọn phiên hết hạn + `ai_calls`; mọi cửa sổ có sàn 1 ngày, `RETENTION_MIN_ROWS=10000` giữ dữ liệu demo, `audit_log` chỉ dọn khi `AUDIT_RETENTION_DAYS>0`. Cron 00:xx; `GET|POST /api/jobs/retention[/run]` (admin/CEO).
+- **RLS hatch**: policy phải dùng `app_tenant_unset() OR tenant_id = app_current_tenant()`. Dạng thô `current_setting('app.current_tenant', true) = ''` trả NULL (không phải TRUE) khi GUC chưa từng SET — đúng case của job nền — nên chặn im lặng. Job nền phải tự sở hữu tenant context, không trông chờ callsite.
 - **BIM viewer**: `SetWasmPath` appends bare names — must pass a custom `locateFile` returning the hashed `?url` asset. `FlatMesh.geometries` is an Emscripten Vector (size/get), not iterable.
 - **Migrations**: SQL files reject `//` comments at runner level (3 strikes in v0.9.0); connector columns documented per rank above.
 - **Bugfix audit P0–P3 (v0.10.1–v0.10.4)**: Express 4 async safety net lives in `lib/async-handler.js`: prototype patch (future registrations) + retroactive `wrapAllRouters` (existing stacks — must recurse into `layer.route.stack`, wrapping the Route dispatcher alone does NOT catch handler rejections; proven live: forced PG 22P02 in a bare handler → JSON 500, process alive). `/api` unknown paths are JSON 404 (the old SPA `*` fallback returned HTML 200 for missing API routes, which made 2 e2e assertions false-pass). Upload canonical prefixes: writes `/api/upload`, reads `/api/uploads` (mount-site table in `index.js`). Install scripts: only ssh2 has one (`install.js` builds an OPTIONAL crypto binding, failure tolerated → pure-JS fallback active); aws-sdk/xlsx pure JS; own packages have no install hooks.

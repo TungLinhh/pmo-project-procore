@@ -2,6 +2,7 @@
 // suggestions (suggest-only), confirm write, profiles CRUD (no secret leak),
 // mocked SFTP push + log. Self-cleaning (scratch vendor/profile/logs removed).
 // Run: node tests/e2e/erp-roundtrip.mjs (spawns its own server, needs dev DB)
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 
 let failures = 0;
@@ -9,7 +10,7 @@ const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`);
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3118';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3118', ERP_SFTP_MOCK: '1', TEST_ERP_SECRET: 'mock-secret' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 
 const scratch = { vendors: [], profiles: [] };
 try {
@@ -46,15 +47,15 @@ try {
   ok(g4 === 401, `anon → 401 (got ${g4})`);
 
   // 3. Vendor import suggestions (self-seeded known vendor → similarity 1.0).
-  const kv = await db.prepare(`INSERT INTO vendors (tenant_id, name) VALUES (1, 'ERP-KNOWN-VENDOR') RETURNING id`).runAsync();
+  const kv = await db.prepare(`INSERT INTO vendors (tenant_id, name) VALUES (1, 'ERP-KNOWN, VENDOR') RETURNING id`).runAsync();
   scratch.vendors.push(Number(kv.lastInsertRowid));
-  const csvInNamed = `name,tax_id\n"ERP-KNOWN-VENDOR",0109998888\n"Nhà Thầu Ma Không Tồn Tại XYZ",0101112223\n`;
+  const csvInNamed = `name,tax_id\n"ERP-KNOWN, VENDOR",0109998888\n"Nhà Thầu Ma Không Tồn Tại XYZ",0101112223\n`;
   const fd = new FormData();
   fd.append('file', new Blob([csvInNamed], { type: 'text/csv' }), 'vendors.csv');
   const imp = await fetch(BASE + '/api/erp/vendors/import', { method: 'POST', headers: H(acctT), body: fd }).then(async r => ({ s: r.status, j: await r.json() }));
   ok(imp.s === 200 && imp.j.rows === 2, `import parses 2 rows (got ${imp.s})`);
   const [s1, s2] = imp.j.suggestions;
-  ok(s1.match && s1.match.similarity === 1 && s1.match.vendor_name === 'ERP-KNOWN-VENDOR', 'exact name matches 1.0');
+  ok(s1.match && s1.match.similarity === 1 && s1.match.vendor_name === 'ERP-KNOWN, VENDOR', 'quoted comma + exact name matches 1.0');
   ok(!s2.match, 'unknown vendor has no match (suggest-only, nothing written)');
   const siteImp = await fetch(BASE + '/api/erp/vendors/import', { method: 'POST', headers: H(siteT), body: fd }).then(r => r.status);
   ok(siteImp === 403, `site import → 403 (got ${siteImp})`);

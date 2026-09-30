@@ -1,5 +1,6 @@
 // STEP0-03: POST /api/upload/batch — zip intake with slip validation + caps + reasons.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/step0-03-batch-zip.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn, execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
@@ -9,7 +10,7 @@ const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.
 const BASE = 'http://localhost:3213';
 
 // build fixtures: 2 real xlsx via backend's own xlsx dep, malicious zip via python stdlib
-const require = createRequire('/home/vutun/pmo_project/backend/package.json');
+const require = createRequire(new URL('../../backend/package.json', import.meta.url));
 const XLSX = require('xlsx');
 const wb = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['STT', 'Name'], [1, 'a']]), 'S1');
@@ -33,7 +34,7 @@ print('zip rebuilt')
 PYEOF`);
 
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3213' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) });
   const { token } = await login.json();

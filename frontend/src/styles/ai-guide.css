@@ -1,0 +1,167 @@
+/* Hướng dẫn sử dụng AI: bảng thu gọn + câu mẫu + xem trước phân tích.
+   Dùng token sẵn có nên tự đúng ở cả sáng và tối. */
+
+.ai-guide {
+  margin: 8px 0;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-surface-2);
+}
+
+.ai-guide-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
+  background: none;
+  border: 0;
+  color: var(--c-text-2);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ai-guide-toggle:hover {
+  color: var(--c-text);
+}
+
+/* Chỉ hiện khi đang đóng: đã mở thì tiêu đề đã nói hết nội dung. */
+.ai-guide-hint {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--c-text-3);
+}
+
+.ai-guide-caret {
+  width: 10px;
+  color: var(--c-text-3);
+}
+
+.ai-guide-body {
+  padding: 0 10px 10px;
+  border-top: 1px solid var(--c-border);
+  font-size: 12px;
+  color: var(--c-text-2);
+}
+
+.ai-guide-label {
+  margin: 8px 0 5px;
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.ai-guide-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ai-guide-chip {
+  padding: 4px 9px;
+  border: 1px solid var(--c-border-2);
+  border-radius: 999px;
+  background: var(--c-surface);
+  color: var(--c-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ai-guide-chip:hover {
+  border-color: var(--c-primary);
+  color: var(--c-primary);
+}
+
+.ai-guide-tips {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.ai-guide-tips li {
+  margin-bottom: 4px;
+}
+
+.ai-guide-tips strong {
+  color: var(--c-text);
+}
+
+.ai-guide-rules {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+}
+
+.ai-guide-rules th,
+.ai-guide-rules td {
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--c-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.ai-guide-rules th {
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.ai-guide-rules td.need {
+  width: 34%;
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+/* Xem trước phân tích: báo cáo dữ liệu, không phải lỗi. Màu theo trạng thái
+   đọc được chứ không theo mức độ nghiêm trọng. */
+.ai-guide-parse {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-surface);
+}
+
+.ai-guide-parse.ready {
+  border-color: var(--c-on-track);
+}
+
+.ai-guide-parse ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-guide-parse li {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 12px;
+}
+
+.ai-guide-parse li .k {
+  width: 108px;
+  flex: none;
+  color: var(--c-text-3);
+}
+
+.ai-guide-parse li .v {
+  color: var(--c-text);
+}
+
+.ai-guide-parse li.miss .v {
+  color: var(--c-pending);
+}
+
+.ai-guide-parse li.opt .v {
+  color: var(--c-text-3);
+}
+
+.ai-guide-parse-note {
+  margin-top: 6px;
+  color: var(--c-pending);
+}
+
+.ai-guide-parse-ok {
+  margin-top: 6px;
+  color: var(--c-on-track);
+}

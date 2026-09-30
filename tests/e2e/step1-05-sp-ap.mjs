@@ -2,10 +2,27 @@
 // Asserts chain integrity (PR→invoice→contract) + no writes outside the slice.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/step1-05-sp-ap.mjs
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
-const SP = '/mnt/c/Users/vutun/Downloads/HBG-BTE-MSA-S&P-CTY-2020.03.28.xlsx';
+const SP = process.env.SP_FILE || '';
 const { existsSync } = await import('node:fs');
 if (!existsSync(SP)) {
-  console.log('SKIP — S&P file absent');
+  // Nói **chính xác** còn thiếu gì, thay vì "S&P file absent".
+  //
+  // Đo 2026-09-28 trên toàn bộ `reference_sheets/`: có **14 file** có đủ bảng kê vật tư
+  // *và* cột thanh toán (mọi `Vật tư *.xlsx`), nhưng ô thanh toán trong đó **rỗng** ⇒
+  // `sp_ap.parse` ra `batches: 0` ⇒ không dựng được chuỗi hợp đồng → hóa đơn → PR mà
+  // bài này kiểm. File `TIẾN ĐỘ THANH TOÁN A_B/*.xlsx` thì có dữ liệu tiền nhưng
+  // **không** có bảng kê vật tư ⇒ `totalRows = 0`.
+  //
+  // Nên bài này cần đúng sổ của khách hàng. Bỏ file vào `SP_FILE` là chạy được ngay;
+  // `tests/e2e/bte-files.mjs` đã sẵn bảng tên thay thế cho `HBG-BTE-MSA-S&P-CTY-2020.03.28.xlsx`.
+  const { btePath } = await import('./bte-files.mjs');
+  const auto = btePath('TIẾN ĐỘ THANH TOÁN A_B', 'HBG-BTE-MSA-S&P-CTY-2020.03.28.xlsx', { optional: true });
+  console.log(`
+SKIP — chưa có sổ S&P (supplier payment) của khách hàng.
+  Cần: TIẾN ĐỘ THANH TOÁN A_B/HBG-BTE-MSA-S&P-CTY-2020.03.28.xlsx
+        — sổ có BẢNG KÊ VẬT TƯ + CỘT THANH TOÁN có số thật.
+  Đặt biến:   SP_FILE=/duong/dan/toi/hoa-don-NCC.xlsx node tests/e2e/step1-05-sp-ap.mjs
+  Tự dò tên:  ${auto ? `đã thấy ${auto} nhưng parse ra 0 batch` : 'chưa có file nào khớp trong reference_sheets/'}`);
   process.exit(0);
 }
 const { parse, commit } = await import('../../backend/src/services/ingest/sp_ap.js');

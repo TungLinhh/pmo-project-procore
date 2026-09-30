@@ -2,7 +2,8 @@
 // Lấy từ audit log (resource_type = material_submittal)
 
 import { useState, useEffect } from 'react';
-import { audit, materialSubmittals } from '../api/index.js';
+import { materialSubmittals, request } from '../api/index.js';
+import { t } from '../i18n/index.js';
 
 export default function SubmittalHistory({ submittalId, onClose }) {
   const [history, setHistory] = useState([]);
@@ -12,7 +13,7 @@ export default function SubmittalHistory({ submittalId, onClose }) {
   useEffect(() => {
     Promise.all([
       materialSubmittals.history(submittalId),
-      fetch(`/api/material-submittals/${submittalId}`).then(r => r.json()),
+      request(`/material-submittals/${submittalId}`),
     ]).then(([hist, cur]) => {
       setHistory(hist);
       setCurrent(cur);
@@ -23,7 +24,7 @@ export default function SubmittalHistory({ submittalId, onClose }) {
     });
   }, [submittalId]);
 
-  if (loading) return <div className="modal-bg"><div className="modal">Đang tải...</div></div>;
+  if (loading) return <div className="modal-bg"><div className="modal">{t('sh.busy_loading')}</div></div>;
 
   return (
     <div className="modal-bg" onClick={onClose}>
@@ -39,7 +40,7 @@ export default function SubmittalHistory({ submittalId, onClose }) {
             <div><strong>Revision:</strong> v{current.revision_number || 0}</div>
           </div>
         )}
-        <h4>Audit Trail ({history.length} entries)</h4>
+        <h4>{t('g.audit_trail')} ({history.length} entries)</h4>
         <ul className="history-list">
           {history.map(h => (
             <li key={h.id} className={`history-item action-${h.action?.toLowerCase()}`}>
@@ -51,7 +52,7 @@ export default function SubmittalHistory({ submittalId, onClose }) {
               {h.note && <div className="history-note">{h.note}</div>}
               {h.field_changes?.length > 0 && (
                 <details className="history-diff">
-                  <summary>Field changes ({h.field_changes.length})</summary>
+                  <summary>{t('g.field_changes')} ({h.field_changes.length})</summary>
                   <ul>
                     {h.field_changes.map((fc, i) => (
                       <li key={i}>
@@ -64,7 +65,7 @@ export default function SubmittalHistory({ submittalId, onClose }) {
             </li>
           ))}
         </ul>
-        <button onClick={onClose} className="btn-secondary">Đóng</button>
+        <button onClick={onClose} className="btn-secondary">{t('sh.btn_close')}</button>
       </div>
     </div>
   );

@@ -1,7 +1,11 @@
 // E2E test toàn bộ flow PMO MVP
 // Chạy: BASE_URL=http://localhost:3000 node tests/e2e/api.mjs (cần backend running)
 import { apiBase, psqlQuery } from '../tools/env.mjs';
+import { cleanupOnExit } from './lib-cleanup.mjs';
 
+
+// Dọn dữ liệu thật nếu bài kiểm dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupOnExit(['E2E test directive'], { label: 'api' });
 const BASE = apiBase();
 const results = [];
 const log = (n, ok, detail = '') => results.push({ n, ok, detail });

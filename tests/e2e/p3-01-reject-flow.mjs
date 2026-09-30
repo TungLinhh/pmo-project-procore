@@ -58,9 +58,18 @@ const ok = (cond, msg) => { console.log((cond ? '✅' : '❌') + ' ' + msg); con
   // Step 4: Verify the bug fix is in place by reading the file
   console.log('\n--- Verifying frontend fix ---');
   const apiSrc = execSync('cat frontend/src/api/index.js', { cwd: new URL('../..', import.meta.url).pathname }).toString();
-  ok(apiSrc.match(/JSON\.stringify\(body\)/), 'req() now auto-stringifies body');
-  ok(apiSrc.match(/Content-Type.*application\/json/), 'req() now sets Content-Type for JSON');
-  ok(apiSrc.includes('isFormData'), 'req() skips Content-Type for FormData (upload)');
+  // Khẳng định **hành vi**, không phải tên biến. Bản cũ đòi chuỗi `isFormData`; code
+  // đã đặt cờ theo chiều ngược (`isPlainBody` = "không phải FormData") nên bài đỏ dù
+  // hành vi vẫn đúng: FormData **không** bị gán Content-Type (để trình duyệt tự đặt
+  // ranh giới multipart), còn object thường thì được stringify.
+  ok(apiSrc.includes('instanceof FormData'), 'req() phân biệt FormData với body thường');
+  ok(apiSrc.includes('JSON.stringify(originalBody)'), 'req() stringify body thường');
+  ok(/isPlainBody \? JSON\.stringify\(originalBody\) : originalBody/.test(apiSrc),
+    'req() gửi nguyên FormData, không stringify');
+  // Content-Type chỉ được đặt trong nhánh body thường — kiểm bằng cách đảo: dòng gán
+  // header phải nằm sau điều kiện `isPlainBody`.
+  const setCt = apiSrc.match(/if \(isPlainBody[^\n]*\) headers\['Content-Type'\][^\n]*/);
+  ok(!!setCt, 'req() chỉ đặt Content-Type: application/json khi body không phải FormData');
 
   console.log(`\n=== ${pass}/${pass+fail} PASS ===`);
   process.exit(fail > 0 ? 1 : 0);

@@ -2,6 +2,7 @@
 // suggestions, plan gate, quota honesty. Fixture: tests/fixtures/pilot-tower.ifc
 // (no binaries in git). Self-cleaning (rows + staged files removed).
 // Run: node tests/e2e/bim-intake.mjs (spawns its own server, needs dev DB)
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 import { readFileSync, unlinkSync } from 'node:fs';
 
@@ -10,7 +11,7 @@ const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`);
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3117';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3117' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 
 const stagedKeys = [];
 const uploadIds = [];
@@ -48,6 +49,13 @@ try {
   ok(meta.space_count === 2, `2 spaces (got ${meta.space_count})`);
   ok(meta.truncated === false, 'not truncated');
   ok(u1.j.zone_id != null, 'explicit zone linked');
+  const dl = await fetch(BASE + `/api/bim/models/${u1.j.id}/download`, { headers: H(adminT) });
+  const dlBytes = Buffer.from(await dl.arrayBuffer());
+  ok(dl.status === 200 && dlBytes.equals(readFileSync('tests/fixtures/pilot-tower.ifc')), `BIM download round-trips bytes (got ${dl.status}/${dlBytes.length})`);
+  const dlNoAuth = await fetch(BASE + `/api/bim/models/${u1.j.id}/download`);
+  ok(dlNoAuth.status === 401, `BIM download no token → 401 (got ${dlNoAuth.status})`);
+  const dlOtherTenant = await fetch(BASE + `/api/bim/models/${u1.j.id}/download`, { headers: H(pilotT) });
+  ok([403, 404].includes(dlOtherTenant.status), `BIM download other tenant denied (got ${dlOtherTenant.status})`);
 
   // 3. Same content re-uploaded → SAME row (content-addressed stable identity).
   const u2 = await postFile(adminT, `/api/projects/${hbg.id}/bim/models`, 'tests/fixtures/pilot-tower.ifc', 'tower_BOH.ifc', {});

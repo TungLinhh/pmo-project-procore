@@ -16,44 +16,52 @@ import { requireAuth } from '../lib/auth.js';
 import { permissionMiddleware } from '../lib/permission-middleware.js';
 import { requireResourceProject, checkProjectAccess } from '../lib/project-access.js';
 import { getDb } from '../db/index.js';
+import { readPage, withTotal } from '../lib/pagination.js';
 import { withAudit } from '../lib/with-audit.js';
-import { checkTransition } from '../lib/transitions.js';
+import { checkTransition, checkLifecycle } from '../lib/transitions.js';
 import { resolveChain, satisfiesLevel } from '../lib/approval.js';
 import { notifyMany } from '../services/notify.js';
+import { errorBody } from '../lib/error-body.js';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
-router.use(permissionMiddleware);
 router.use('/:id', requireResourceProject({ table: 'shop_drawings' }));
+router.use(permissionMiddleware);
 
 const MAX_LEVEL = 5; // L1-L5
 
 // ===== Create shop drawing =====
 router.post('/', async (req, res) => {
   const db = getDb();
-  const { project_id, zone_id, drawing_code, name_vi, name_en, planned_submit_date } = req.body || {};
+  const { project_id, zone_id, drawing_code, name_vi, name_en, planned_submit_date, work_item_id } = req.body || {};
   if (!project_id || !zone_id || !drawing_code) {
     return res.status(400).json({ error: 'project_id, zone_id, drawing_code required' });
   }
   if (!(await checkProjectAccess(req.user, Number(project_id)))) {
     return res.status(404).json({ error: 'Project not found' });
   }
+  const zone = await db.prepare('SELECT id FROM zones WHERE id = ? AND project_id = ?').getAsync(zone_id, project_id);
+  if (!zone) return res.status(404).json({ error: 'Zone not found' });
+  if (work_item_id) {
+    const linked = await getDb().prepare('SELECT id FROM work_items WHERE id = ? AND project_id = ?').getAsync(work_item_id, project_id);
+    if (!linked) return res.status(404).json({ error: 'Work item not found' });
+  }
   try {
     const r = await withAudit(req, {
-      action: 'CREATE', resourceType: 'shop_drawing', resourceId: 0,
+      action: 'CREATE', resourceType: 'shop_drawing',
       context: { project_id, zone_id, drawing_code },
       after: { project_id, zone_id, drawing_code, name_vi, name_en },
       note: `Tạo shop drawing ${drawing_code}`,
     }, async (client) => {
       const ins = await client.query(
-        `INSERT INTO shop_drawings (project_id, zone_id, drawing_code, name_vi, name_en, planned_submit_date, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, 'DRAFT', now()) RETURNING *`,
-        [project_id, zone_id, drawing_code, name_vi, name_en, planned_submit_date || null]
+        `INSERT INTO shop_drawings (project_id, zone_id, work_item_id, drawing_code, name_vi, name_en, planned_submit_date, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, 'DRAFT', now()) RETURNING *`,
+        [project_id, zone_id, work_item_id || null, drawing_code, name_vi, name_en, planned_submit_date || null]
       );
       return ins.rows[0];
     });
     res.json(r);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 
@@ -61,14 +69,24 @@ router.post('/', async (req, res) => {
 router.get('/', async (req, res) => {
   const db = getDb();
   const { project_id, status } = req.query;
+  const { limit, offset } = readPage(req.query);
+  if (!project_id) return res.status(400).json({ error: 'project_id required' });
+  if (!(await checkProjectAccess(req.user, Number(project_id)))) return res.status(404).json({ error: 'Project not found' });
   const where = ['1=1'];
   const params = [];
   let i = 1;
   if (project_id) { where.push(`project_id = $${i++}`); params.push(project_id); }
   if (status) { where.push(`status = $${i++}`); params.push(status); }
-  res.json(await db.prepare(
-    `SELECT * FROM shop_drawings WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT 200`
-  ).allAsync(...params));
+  const clause = where.join(' AND ');
+  // LIMIT/OFFSET là tham số, không nội suy: `?limit` là do người dùng gửi.
+  const rows = await db.prepare(
+    `SELECT * FROM shop_drawings WHERE ${clause} ORDER BY id DESC LIMIT $${i++} OFFSET $${i}`
+  ).allAsync(...params, limit, offset);
+  const [{ total }] = await db.prepare(
+    `SELECT count(*)::int AS total FROM shop_drawings WHERE ${clause}`
+  ).allAsync(...params);
+  withTotal(res, total);
+  res.json(rows);
 });
 
 // ===== Get single shop drawing =====
@@ -85,9 +103,9 @@ router.patch('/:id', async (req, res) => {
   const old = await db.prepare('SELECT * FROM shop_drawings WHERE id = $1').getAsync(req.params.id);
   if (!old) return res.status(404).json({ error: 'Not found' });
   if (!['DRAFT', 'REJECTED'].includes(old.status)) {
-    return res.status(409).json({ error: `Chỉ sửa được khi DRAFT/REJECTED. Hiện tại: ${old.status}` });
+    return res.status(422).json({ error: `Chỉ sửa được khi DRAFT/REJECTED. Hiện tại: ${old.status}` });
   }
-  const allowed = ['name_vi', 'name_en', 'progress_pct', 'planned_submit_date', 'notes', 'drawing_code'];
+  const allowed = ['name_vi', 'name_en', 'progress_pct', 'planned_submit_date', 'notes', 'drawing_code', 'work_item_id'];
   const updates = [];
   const params = [];
   const fieldChanges = [];
@@ -100,6 +118,10 @@ router.patch('/:id', async (req, res) => {
     }
   }
   if (!updates.length) return res.status(400).json({ error: 'No editable fields provided' });
+  if ('work_item_id' in (req.body || {}) && req.body.work_item_id != null) {
+    const linked = await db.prepare('SELECT id FROM work_items WHERE id = ? AND project_id = ?').getAsync(req.body.work_item_id, old.project_id);
+    if (!linked) return res.status(404).json({ error: 'Work item not found' });
+  }
   params.push(req.params.id);
   try {
     const result = await withAudit(req, {
@@ -110,15 +132,27 @@ router.patch('/:id', async (req, res) => {
       fieldChanges,
       note: `Edit shop drawing (${old.status})`,
     }, async (client) => {
+      // `AND status IN ('DRAFT','REJECTED')` trong **chính câu UPDATE**, không chỉ ở
+      // kiểm tra ngoài transaction. Nếu không, một `POST /:id/transition` (→ SUBMITTED)
+      // đi qua giữa lúc đọc và lúc ghi thì PATCH vẫn sửa được bản vẽ đã trình duyệt —
+      // kể cả đổi `drawing_code` của một tài liệu đã duyệt, phá vỡ danh tính mà cả
+      // chuỗi duyệt BQL dựa vào. Các route anh em trong chính file này đã làm đúng
+      // (`AND status = $5` ở L183/L299).
       const r = await client.query(
-        `UPDATE shop_drawings SET ${updates.join(', ')} WHERE id = $${i} RETURNING *`,
+        `UPDATE shop_drawings SET ${updates.join(', ')} WHERE id = $${i} AND status IN ('DRAFT', 'REJECTED') RETURNING *`,
         params
       );
+      if (!r.rows[0]) {
+        throw Object.assign(
+          new Error('Bản vẽ đã chuyển trạng thái, không sửa được nữa — tải lại và thử lại'),
+          { status: 409 },
+        );
+      }
       return r.rows[0];
     });
     res.json(result);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 
@@ -159,9 +193,10 @@ router.post('/:id/transition', async (req, res) => {
       note: comment || `${old.status} → ${to_status}`,
     }, async (client) => {
       const r = await client.query(
-        `UPDATE shop_drawings SET status = $1::workflow_status, approval_date = CASE WHEN $1::workflow_status = 'APPROVED' THEN CURRENT_DATE ELSE approval_date END, actual_submit_date = CASE WHEN $1::workflow_status = 'SUBMITTED' AND actual_submit_date IS NULL THEN CURRENT_DATE ELSE actual_submit_date END, rejected_reason = CASE WHEN $1::workflow_status = 'REJECTED' THEN $2 ELSE rejected_reason END, rejected_at = CASE WHEN $1::workflow_status = 'REJECTED' THEN now() ELSE rejected_at END, rejected_by = CASE WHEN $1::workflow_status = 'REJECTED' THEN $3 ELSE rejected_by END WHERE id = $4 RETURNING *`,
-        [to_status, comment || null, req.user.id, id]
+        `UPDATE shop_drawings SET status = $1::workflow_status, approval_date = CASE WHEN $1::workflow_status = 'APPROVED' THEN CURRENT_DATE ELSE approval_date END, actual_submit_date = CASE WHEN $1::workflow_status = 'SUBMITTED' AND actual_submit_date IS NULL THEN CURRENT_DATE ELSE actual_submit_date END, rejected_reason = CASE WHEN $1::workflow_status = 'REJECTED' THEN $2 ELSE rejected_reason END, rejected_at = CASE WHEN $1::workflow_status = 'REJECTED' THEN now() ELSE rejected_at END, rejected_by = CASE WHEN $1::workflow_status = 'REJECTED' THEN $3 ELSE rejected_by END WHERE id = $4 AND status = $5::workflow_status RETURNING *`,
+        [to_status, comment || null, req.user.id, id, old.status]
       );
+      if (!r.rows[0]) throw Object.assign(new Error('Shop drawing changed; reload and retry'), { status: 409 });
       return r.rows[0];
     });
     const { emitDecision } = await import('../lib/events.js');
@@ -169,8 +204,42 @@ router.post('/:id/transition', async (req, res) => {
     res.json(result);
   } catch (e) {
     console.error('[shop transition]', req.params.id, '→', to_status, '|', e.message);
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
+});
+
+// Record the construction revision after an IFC drawing has been approved.
+router.post('/:id/as-built', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'id must be integer' });
+  const db = getDb();
+  const old = await db.prepare('SELECT * FROM shop_drawings WHERE id = ?').getAsync(id);
+  if (!old) return res.status(404).json({ error: 'Not found' });
+  if (old.status !== 'APPROVED') return res.status(422).json({ error: 'Chỉ shopdrawing APPROVED mới cập nhật as-built' });
+  const lifecycle = checkLifecycle('shop_as_built', old.as_built_status || 'PENDING', 'RECORDED');
+  if (!lifecycle.ok) return res.status(409).json({ error: lifecycle.error });
+  const notes = req.body?.notes == null ? null : String(req.body.notes).slice(0, 4000);
+  try {
+    const row = await withAudit(req, {
+      action: 'AS_BUILT', resourceType: 'shop_drawing', resourceId: id,
+      context: { project_id: old.project_id, drawing_code: old.drawing_code },
+      before: { as_built_status: old.as_built_status, as_built_at: old.as_built_at },
+      after: { as_built_status: 'RECORDED', as_built_at: new Date().toISOString(), notes },
+      fieldChanges: [{ field: 'as_built_status', from: old.as_built_status, to: 'RECORDED' }],
+      note: `Cập nhật as-built cho ${old.drawing_code}`,
+    }, async (client) => {
+      const result = await client.query(
+        `UPDATE shop_drawings
+         SET as_built_status = 'RECORDED', as_built_at = now(), as_built_by = $1, as_built_notes = $2
+         WHERE id = $3 AND status = 'APPROVED' AND as_built_status = 'PENDING'
+         RETURNING *`,
+        [req.user.id, notes, id]
+      );
+      if (result.rowCount !== 1) throw Object.assign(new Error('As-built đã được cập nhật bởi phiên khác'), { status: 409 });
+      return result.rows[0];
+    });
+    res.status(201).json(row);
+  } catch (e) { res.status(e.status || 500).json(errorBody(e)); }
 });
 
 // ===== L1-L5 approve at specific level =====
@@ -206,16 +275,19 @@ router.post('/:id/approve-level', async (req, res) => {
     return res.status(403).json({ error: 'Forbidden' });
   }
   if (old.status === 'APPROVED') {
-    return res.status(409).json({ error: 'Đã approved rồi, không thể duyệt thêm' });
+    return res.status(422).json({ error: 'Đã approved rồi, không thể duyệt thêm' });
   }
   if (old.status === 'DRAFT' || old.status === 'REJECTED') {
-    return res.status(409).json({ error: `Phải submit trước khi approve. Hiện tại: ${old.status}` });
+    return res.status(422).json({ error: `Phải submit trước khi approve. Hiện tại: ${old.status}` });
+  }
+  if (old[`bql_l${lvl}_response`]) {
+    return res.status(409).json({ error: `L${lvl} đã có quyết định; không thể ghi đè` });
   }
 
   // Check previous levels passed
   for (let i = 1; i < lvl; i++) {
     if (old[`bql_l${i}_response`] !== 'P' && old[`bql_l${i}_response`] !== 'C') {
-      return res.status(409).json({ error: `L${i} chưa được duyệt Pass. Hiện tại: ${old[`bql_l${i}_response`] || 'pending'}` });
+      return res.status(422).json({ error: `L${i} chưa được duyệt Pass. Hiện tại: ${old[`bql_l${i}_response`] || 'pending'}` });
     }
   }
 
@@ -237,9 +309,10 @@ router.post('/:id/approve-level', async (req, res) => {
       note: `L${lvl} ${response === 'F' ? 'FAIL' : 'PASS'}${comment ? ': ' + comment : ''}`,
     }, async (client) => {
       const r = await client.query(
-        `UPDATE shop_drawings SET bql_l${lvl}_response = $1, bql_l${lvl}_date = CURRENT_DATE, bql_l${lvl}_comment = $2, status = $3::workflow_status, approval_date = $4, rejected_reason = CASE WHEN $3::workflow_status = 'REJECTED' THEN $5 ELSE rejected_reason END, rejected_at = CASE WHEN $3::workflow_status = 'REJECTED' THEN now() ELSE rejected_at END, rejected_by = CASE WHEN $3::workflow_status = 'REJECTED' THEN $6 ELSE rejected_by END WHERE id = $7 RETURNING *`,
-        [response, comment || null, newStatus, approvalDate, comment || null, req.user.id, id]
+        `UPDATE shop_drawings SET bql_l${lvl}_response = $1, bql_l${lvl}_date = CURRENT_DATE, bql_l${lvl}_comment = $2, status = $3::workflow_status, approval_date = $4, rejected_reason = CASE WHEN $3::workflow_status = 'REJECTED' THEN $5 ELSE rejected_reason END, rejected_at = CASE WHEN $3::workflow_status = 'REJECTED' THEN now() ELSE rejected_at END, rejected_by = CASE WHEN $3::workflow_status = 'REJECTED' THEN $6 ELSE rejected_by END WHERE id = $7 AND status = $8::workflow_status AND bql_l${lvl}_response IS NULL RETURNING *`,
+        [response, comment || null, newStatus, approvalDate, comment || null, req.user.id, id, old.status]
       );
+      if (!r.rows[0]) throw Object.assign(new Error('Shop drawing changed; reload and retry'), { status: 409 });
       return r.rows[0];
     });
     if (newStatus === 'APPROVED' || newStatus === 'REJECTED') {
@@ -248,7 +321,7 @@ router.post('/:id/approve-level', async (req, res) => {
     }
     res.json(result);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 

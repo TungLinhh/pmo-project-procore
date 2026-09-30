@@ -1,15 +1,20 @@
 // P0-06: saveFile shape — daily photos + /api/upload store real storage keys (no NULL).
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p0-06-savefile.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { cleanupProjectsOnExit } from './lib-cleanup.mjs';
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3106';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3106' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 
+
+// Dọn dự án thử nghiệm nếu bài dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupProjectsOnExit(['P0-06-D-%'], { label: 'p0-06-savefile' });
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) });
   const { token } = await login.json();
@@ -30,7 +35,7 @@ try {
     `file_path is storage key + file_name original (got ${photo?.file_path}/${photo?.file_name})`);
 
   // --- legacy /api/upload: returns upload_id + staged file_uploads row + counts
-  const require = createRequire('/home/vutun/pmo_project/backend/package.json');
+  const require = createRequire(new URL('../../backend/package.json', import.meta.url));
   const XLSX = require('xlsx');
   // Unique content per run: same sha256 would hit the (tenant_id, file_hash)
   // upsert and return an old row outside the list's LIMIT window.

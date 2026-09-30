@@ -6,11 +6,12 @@
 import { matchZoneCode } from './zone_matcher.js';
 import { norm } from './classify.js';
 import { readSheet } from './excel.js';
+import { need } from './optional-dep.js';
 
 // Rows of the TĐ TỔNG sheet shaped {zone, pct, rowIndex}: first cell in the
 // row that maps to a zone code + first 0..1.5 number in the following cols.
 export async function readRollupPercents(filePath, sheetHint = 'TĐ TỔNG') {
-  const XLSX = (await import('xlsx')).default;
+  const XLSX = await need('xlsx');
   const wb = XLSX.readFile(filePath, { cellDates: true });
   const sheetName = wb.SheetNames.find(n => norm(n).includes(norm(sheetHint))) || wb.SheetNames.find(n => !/^(foxz|sheet\d*)$/i.test(n.trim()));
   if (!sheetName) return { sheet: null, rows: [] };

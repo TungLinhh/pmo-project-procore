@@ -4,14 +4,14 @@
   gap: 16px;
   align-items: end;
   margin-bottom: 24px;
-  background: #fff;
+  background: var(--c-surface);
   padding: 16px;
   border-radius: 8px;
 }
 
 .otd-filters > label {
   font-size: 13px;
-  color: #4a5568;
+  color: var(--c-text-2);
   font-weight: 500;
   display: flex;
   flex-direction: column;
@@ -19,7 +19,7 @@
 }
 
 .otd-summary {
-  background: #fff;
+  background: var(--c-surface);
   border-radius: 8px;
   padding: 24px;
   display: flex;
@@ -43,7 +43,7 @@
 }
 
 .otd-section {
-  background: #fff;
+  background: var(--c-surface);
   border-radius: 8px;
   padding: 20px;
   margin-bottom: 20px;
@@ -53,7 +53,7 @@
 .otd-section h3 {
   margin: 0 0 12px;
   font-size: 16px;
-  color: #2c3e50;
+  color: var(--c-text);
 }
 
 .otd-table {
@@ -70,15 +70,19 @@
 
 .otd-table th {
   font-size: 13px;
-  color: #718096;
+  color: var(--c-text-3);
   font-weight: 600;
 }
 
 .otd-table tbody tr:hover {
-  background: #f7fafc;
+  background: var(--c-surface-2);
 }
 
 .muted {
-  color: #718096;
+  color: var(--c-text-3);
   font-size: 13px;
 }
+
+/* ====== Dark mode ======
+   File này từng hard-code nền trắng + màu chữ xám, nên trong dark mode nền
+   vẫn trắng và chữ sáng trên nền sáng → tương phản ~1.2:1. Dùng token. */

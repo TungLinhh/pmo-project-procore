@@ -7,7 +7,7 @@
 // derives every data column from it — no fixed column indexes.
 import { getDb } from '../../db/index.js';
 import { recordFailure } from './failures.js';
-import { readSheet, toText, toFloat, toDate, findDataStart } from '../../lib/excel.js';
+import { readSheet, readWorkbook, toText, toFloat, toDate, findDataStart } from '../../lib/excel.js';
 import { findOrCreateZone } from './index.js';
 import { norm } from '../../lib/classify.js';
 
@@ -181,8 +181,7 @@ function parseRow(row, map) {
 }
 
 export async function parse(filePath, projectId, zoneCode) {
-  const XLSX = (await import('xlsx')).default;
-  const wb = XLSX.readFile(filePath, { cellDates: true });
+  const wb = readWorkbook(filePath);
   const { code, name } = resolveZone(zoneCode);
   const sheets = [];
   for (const sheetName of wb.SheetNames) {
@@ -211,8 +210,14 @@ export async function commit(parsed, projectId, zoneCode, uploadId = null) {
   for (const sheet of parsed.sheets) {
     for (const [idx, row] of sheet.rows.entries()) {
       try {
+        // setCols is explicit: a spreadsheet re-import must not overwrite the
+        // in-app BQL decision. `db.upsert` defaults setCols to every
+        // non-conflict column, which wrote EXCLUDED.bql_l*_response over an
+        // approved level (and nulled it when the sheet cell was empty),
+        // bypassing checkTransition, the chain gate and the 409 guard in
+        // routes/shop.js. `status` was already excluded for the same reason.
         await db.upsert('shop_drawings',
-          { conflictCols: ['project_id', 'drawing_code'] },
+          { conflictCols: ['project_id', 'drawing_code'], setCols: ['zone_id', 'source_sheet', 'upload_id', 'name_vi', 'name_en', 'progress_pct', 'planned_submit_date', 'actual_submit_date', 'rs1_planned_date', 'rs1_actual_date', 'rs2_planned_date', 'rs2_actual_date'] },
           {
             project_id: projectId, zone_id: zoneId, source_sheet: sheet.sheet, upload_id: uploadId,
             drawing_code: row.drawing_code, name_vi: row.name_vi, name_en: row.name_en,

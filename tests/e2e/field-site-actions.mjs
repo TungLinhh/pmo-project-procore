@@ -1,15 +1,20 @@
 // Field site actions as site@hbg.com: schedule progress PATCH, today's report +
 // manpower + photo upload + material usage. Real PG + server.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/field-site-actions.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
+import { cleanupProjectsOnExit } from './lib-cleanup.mjs';
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3107';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3107' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 
+
+// Dọn dự án thử nghiệm nếu bài dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupProjectsOnExit(['SITE-MAT-%'], { label: 'field-site-actions' });
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'site@hbg.com', password: 'admin123' }) });
   const { token } = await login.json();
@@ -38,7 +43,7 @@ try {
   if (!rep) rep = (await post('/api/projects/1/daily-reports', { report_date: today })).j;
   ok(!!rep?.id, `today report (id=${rep?.id})`);
   const mp = await post(`/api/daily-reports/${rep.id}/manpower`, { role_name_vi: 'SITE-TEST-TEAM', headcount: 7 });
-  ok(mp.s === 200 && mp.j.headcount === 7, 'manpower added by site');
+  ok(mp.s === 201 && mp.j.headcount === 7, 'manpower added by site');
 
   // 3. photo upload
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
@@ -50,7 +55,7 @@ try {
   // 4. material usage
   const code = `SITE-MAT-${Date.now()}`;
   const mat = await post('/api/materials', { project_id: 1, code, name_vi: 'Site test material', notes: 'SL dùng: 5' });
-  ok(mat.s === 200 && mat.j.material_code === code, 'material usage recorded by site');
+  ok(mat.s === 201 && mat.j.material_code === code, 'material usage recorded by site');
 
   // cleanup (only test rows; today's shared report row stays if pre-existing)
   const { getDb } = await import('../../backend/src/db/index.js');

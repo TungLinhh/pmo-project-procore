@@ -3,6 +3,7 @@
 // SLA watcher drafts + dedupe. Runs in AI_MOCK=1 (zero spend, no network).
 // Self-cleaning (HBG scratch rows removed in finally).
 // Run: node tests/e2e/ai-assistant.mjs (spawns its own server, needs dev DB)
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 
 // The SLA watcher is imported INTO this process (not the spawned server), so
@@ -12,11 +13,15 @@ process.env.AI_MOCK = '1';
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
-const BASE = 'http://localhost:3114';
-const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3114', AI_MOCK: '1' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+const PORT = Number(process.env.AI_ASSISTANT_PORT || 3114);
+const BASE = process.env.BASE_URL || `http://127.0.0.1:${PORT}`;
+const external = process.env.AI_ASSISTANT_NO_SPAWN === '1';
+const srv = external ? null : spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: String(PORT), AI_MOCK: '1' }, stdio: 'ignore' });
+if (srv) await waitForServer(BASE);
 
 const created = { issues: [], submittals: [], drafts: [], embeddings: [] };
+let originalConfigs = [];
+let originalEmbeddings = [];
 // Baseline embedding ids (dev DB may hold rows from earlier runs): anything NOT
 // in this set afterwards was caused by this test (mock vectors must never leak
 // into a future REAL backfill, which skips already-embedded rows).
@@ -30,10 +35,17 @@ try {
   const H = (t) => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${t}` });
   const call = (t, m, p, b) => fetch(BASE + p, { method: m, headers: H(t), body: b ? JSON.stringify(b) : undefined }).then(async r => ({ s: r.status, j: await r.json().catch(() => null) }));
 
-  const { getDb } = await import('../../backend/src/db/index.js');
+  const { getDb, getOwnerDb } = await import('../../backend/src/db/index.js');
+  const { collectCorpus } = await import('../../backend/src/lib/ai/retrieval.js');
   const db = getDb();
-  hbgTenant = await db.prepare(`SELECT id FROM tenants WHERE code = 'hbg'`).getAsync();
-  baselineEmbeddings = new Set((await db.prepare('SELECT id FROM ai_embeddings WHERE tenant_id = ?').allAsync(hbgTenant.id)).map((r) => r.id));
+  const ownerDb = getOwnerDb();
+  hbgTenant = await ownerDb.prepare(`SELECT id FROM tenants WHERE code = 'hbg'`).getAsync();
+  originalConfigs = await ownerDb.prepare('SELECT * FROM ai_provider_configs WHERE tenant_id = ? ORDER BY id').allAsync(hbgTenant.id);
+  originalEmbeddings = await ownerDb.prepare(
+    `SELECT tenant_id, project_id, resource_type, resource_id, chunk_text, embedding, embed_model, created_at
+     FROM ai_embeddings WHERE tenant_id = ? ORDER BY id`,
+  ).allAsync(hbgTenant.id);
+  baselineEmbeddings = new Set(originalEmbeddings.map((r) => r.id));
 
   // 0. pgvector present (fail loud if the §0 provisioning regresses).
   const ext = await db.prepare(`SELECT 1 FROM pg_extension WHERE extname = 'vector'`).getAsync();
@@ -44,6 +56,13 @@ try {
   ok(bad1.s === 400, `anthropic embed rejected (got ${bad1.s})`);
   const bad2 = await call(adminT, 'PUT', '/api/ai/config', { configs: [{ purpose: 'chat', provider: 'nope', model: 'x' }] });
   ok(bad2.s === 400, `bad provider rejected (got ${bad2.s})`);
+  const bad3 = await call(adminT, 'PUT', '/api/ai/config', { configs: [{ purpose: 'chat', provider: 'openai', model: 'gpt-4o-mini' }] });
+  ok(bad3.s === 400, `missing embed route rejected (got ${bad3.s})`);
+  const bad4 = await call(adminT, 'PUT', '/api/ai/config', { configs: [
+    { purpose: 'chat', provider: 'openai', model: 'gpt-4o-mini', api_key_env: 'DATA_ENC_KEY' },
+    { purpose: 'embed', provider: 'openai', model: 'text-embedding-3-small' },
+  ]});
+  ok(bad4.s === 400, `unapproved key env rejected (got ${bad4.s})`);
   const cfg = await call(adminT, 'PUT', '/api/ai/config', { configs: [
     { purpose: 'chat', provider: 'openai', model: 'gpt-4o-mini' },
     { purpose: 'embed', provider: 'openai', model: 'text-embedding-3-small' },
@@ -79,16 +98,34 @@ try {
   ).runAsync(pilot.tenant_id, pilot.id);
   created.issues.push(Number(pilotIssue.lastInsertRowid));
   // Decoy: pilot embedding row (tenant 2) with HBG-matching text.
-  const fakeVec = `[${new Array(1536).fill(0.001).join(',')}]`;
+  const fakeVec = `[${new Array(2048).fill(0.001).join(',')}]`;
   const decoy = await db.prepare(
     `INSERT INTO ai_embeddings (tenant_id, project_id, resource_type, resource_id, chunk_text, embedding, embed_model)
      VALUES (?, ?, 'issue', ?, 'ZXYQVT Alpha pilot decoy', ?::vector, 'text-embedding-3-small') RETURNING id`
   ).runAsync(pilot.tenant_id, pilot.id, created.issues[2], fakeVec);
   created.embeddings.push(Number(decoy.lastInsertRowid));
+  const sameResourceDecoy = await ownerDb.prepare(
+    `INSERT INTO ai_embeddings (tenant_id, project_id, resource_type, resource_id, chunk_text, embedding, embed_model)
+     VALUES (?, ?, 'issue', ?, 'same resource id in another tenant', ?::vector, 'text-embedding-3-small') RETURNING id`
+  ).runAsync(pilot.tenant_id, pilot.id, created.issues[0], fakeVec);
+  created.embeddings.push(Number(sameResourceDecoy.lastInsertRowid));
 
   // 3. Backfill embeds the 2 HBG issues (mock vectors).
   const bf = await call(adminT, 'POST', '/api/ai/backfill');
   ok(bf.s === 200 && bf.j.embedded >= 2, `backfill embedded ≥2 (got ${bf.s}/${bf.j?.embedded})`);
+  const corpus = await collectCorpus(hbgTenant.id);
+  ok(corpus.some((row) => row.resource_type === 'payment_request'), 'payment requests are in the AI corpus');
+  ok(corpus.some((row) => row.resource_type === 'payment'), 'payment ledger is in the AI corpus');
+  ok(corpus.some((row) => row.resource_type === 'material_submittal' && /MSB|msb/i.test(row.text)), 'material submittal context includes SLA/MSB fields');
+  const tenantScopedEmbedding = await db.prepare(
+    `SELECT COUNT(*)::int AS n FROM ai_embeddings
+     WHERE resource_type = 'issue' AND resource_id = ? AND embed_model = 'text-embedding-3-small'`,
+  ).getAsync(created.issues[0]);
+  ok(tenantScopedEmbedding.n === 2, `embedding identity includes tenant (got ${tenantScopedEmbedding.n})`);
+  const backfillAudit = await db.prepare(
+    `SELECT id FROM audit_log WHERE resource_type = 'ai_index' AND action = 'AI_BACKFILL' ORDER BY id DESC LIMIT 1`
+  ).getAsync();
+  ok(!!backfillAudit, 'audit-only withAudit persisted');
 
   // 4. Scoped ask: cites HBG issues, never the pilot decoy.
   const ask = await call(adminT, 'POST', '/api/ai/ask', { question: 'ZXYQVT Alpha van xả thế nào?' });
@@ -140,24 +177,45 @@ try {
   ok(usage.s === 200 && usage.j.spent_usd >= 0 && Array.isArray(usage.j.rows), 'usage endpoint');
 } finally {
   if (created.submittals.length || created.issues.length || created.drafts.length || created.embeddings.length) {
-    const { getDb } = await import('../../backend/src/db/index.js');
-    const db = getDb();
-    for (const id of created.submittals) await db.prepare('DELETE FROM material_submittals WHERE id = ?').runAsync(id).catch(() => {});
-    for (const id of created.drafts) await db.prepare('DELETE FROM ai_drafts WHERE id = ?').runAsync(id).catch(() => {});
-    for (const id of created.embeddings) await db.prepare('DELETE FROM ai_embeddings WHERE id = ?').runAsync(id).catch(() => {});
-    for (const id of created.issues) await db.prepare('DELETE FROM issues WHERE id = ?').runAsync(id).catch(() => {});
+    const { getOwnerDb } = await import('../../backend/src/db/index.js');
+    const cleanupDb = getOwnerDb();
+    for (const id of created.submittals) await cleanupDb.prepare('DELETE FROM material_submittals WHERE id = ?').runAsync(id).catch(() => {});
+    for (const id of created.drafts) await cleanupDb.prepare('DELETE FROM ai_drafts WHERE id = ?').runAsync(id).catch(() => {});
+    for (const id of created.embeddings) await cleanupDb.prepare('DELETE FROM ai_embeddings WHERE id = ?').runAsync(id).catch(() => {});
+    for (const id of created.issues) await cleanupDb.prepare('DELETE FROM issues WHERE id = ?').runAsync(id).catch(() => {});
     // HBG backfilled embeddings reference issues by id — sweep leftovers.
-    for (const id of created.issues) await db.prepare(`DELETE FROM ai_embeddings WHERE resource_type = 'issue' AND resource_id = ?`).runAsync(id).catch(() => {});
-    // Mock-vector hygiene: remove any embedding this run created beyond baseline.
-    const now = new Set((await db.prepare('SELECT id FROM ai_embeddings WHERE tenant_id = ?').allAsync(hbgTenant.id)).map((r) => r.id));
-    for (const id of now) {
-      if (!baselineEmbeddings.has(id)) await db.prepare('DELETE FROM ai_embeddings WHERE id = ?').runAsync(id).catch(() => {});
+    for (const id of created.issues) await cleanupDb.prepare(`DELETE FROM ai_embeddings WHERE resource_type = 'issue' AND resource_id = ?`).runAsync(id).catch(() => {});
+    // Mock backfill may replace the tenant's real model rows. Restore the exact
+    // owner snapshot instead of deleting the live corpus after the test.
+    await cleanupDb.prepare('DELETE FROM ai_embeddings WHERE tenant_id = ?').runAsync(hbgTenant.id);
+    for (let i = 0; i < originalEmbeddings.length; i += 50) {
+      const batch = originalEmbeddings.slice(i, i + 50);
+      await Promise.all(batch.map((row) => cleanupDb.prepare(
+        `INSERT INTO ai_embeddings
+          (tenant_id, project_id, resource_type, resource_id, chunk_text, embedding, embed_model, created_at)
+         VALUES (?, ?, ?, ?, ?, ?::vector, ?, ?)`,
+      ).runAsync(
+        row.tenant_id, row.project_id, row.resource_type, row.resource_id,
+        row.chunk_text, String(row.embedding), row.embed_model, row.created_at,
+      )));
     }
-    // Restore HBG AI routing to a sane default (test switched chat to anthropic).
-    await db.prepare(`DELETE FROM ai_provider_configs WHERE tenant_id = (SELECT id FROM tenants WHERE code = 'hbg')`).runAsync().catch(() => {});
   }
-  srv.kill('SIGTERM');
-  await new Promise(r => setTimeout(r, 1000));
+  // Restore routing even when the test failed before creating scratch rows.
+  if (hbgTenant?.id) {
+    const { getOwnerDb } = await import('../../backend/src/db/index.js');
+    const ownerDb = getOwnerDb();
+    await ownerDb.prepare('DELETE FROM ai_provider_configs WHERE tenant_id = ?').runAsync(hbgTenant.id);
+    for (const c of originalConfigs) {
+      await ownerDb.prepare(
+        `INSERT INTO ai_provider_configs (tenant_id, purpose, provider, model, api_key_env, priority, enabled)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).runAsync(hbgTenant.id, c.purpose, c.provider, c.model, c.api_key_env, c.priority, c.enabled);
+    }
+  }
+  if (srv) {
+    srv.kill('SIGTERM');
+    await new Promise(r => setTimeout(r, 1000));
+  }
 }
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 process.exit(failures ? 1 : 0);

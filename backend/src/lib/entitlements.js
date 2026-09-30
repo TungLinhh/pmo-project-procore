@@ -10,6 +10,7 @@
 // Per-tenant overrides: tenants.feature_flags = { "+bulk-import": true, "-chains": false }.
 
 import { getDb } from '../db/index.js';
+import { errorBody } from './error-body.js';
 
 export const PLANS = ['small', 'mid', 'enterprise'];
 
@@ -45,6 +46,7 @@ const ENTERPRISE_ADD = [
   'kpi-targets',     // KPI target editing UI
   'ar-full',         // AR full + retention/VAT
   'schedule-compress', // CPM compression preview/apply/rollback (v0.6.0)
+  'pillar-sim', // pillar what-if CTL-03→06 simulate+DRAFT (GĐ2, SRS 4.2)
   'ai-assistant',    // AI search + drafts + config (v0.7.0)
   'bim-library',     // BIM model library store-only v1 (v0.9.0)
   'erp-export',      // AP ledger export + vendor import + SFTP push (v0.9.0)
@@ -56,8 +58,20 @@ const PLAN_FEATURES = {
   enterprise: new Set([...SMALL, ...MID_ADD, ...ENTERPRISE_ADD]),
 };
 
+// Chuẩn hoá trước khi so khớp. Trước đây `'Enterprise'` hay `' enterprise '`
+// không khớp `PLANS` nên bị coi như plan lạ và **rơi về enterprise** — tức là một
+// lỗi gõ phân cách hoặc hoa thường trong dữ liệu lại mở toàn bộ tính năng.
+export const normalizePlan = (plan) => String(plan ?? '').trim().toLowerCase();
+
+// Khi plan không xác định thì **fail-closed**: chỉ Small. Bản đầu rơi về
+// `enterprise`, nghĩa là bất kỳ lỗi đọc nào (tenant bị xoá, RLS chặn, id sai,
+// plan viết sai chính tả) cũng mở khoá `chains`, `pillar-sim`, `ai-assistant`,
+// `bim-library`, `erp-export`, `bulk-import`, `kpi-targets`, `schedule-compress`.
+// Mất tính năng thì người dùng báo và ta sửa được trong một phút; mở khoá nhầm
+// thì không ai biết cho tới khi có sự cố.
 export function featuresForPlan(plan) {
-  return new Set(PLAN_FEATURES[plan] || PLAN_FEATURES.enterprise);
+  const key = normalizePlan(plan);
+  return new Set(PLAN_FEATURES[key] || PLAN_FEATURES.small);
 }
 
 function applyOverrides(features, flags) {
@@ -70,13 +84,37 @@ function applyOverrides(features, flags) {
   return out;
 }
 
+// Số lần phải hạ cấp tính năng vì không đọc được plan. Để `production-readiness`
+// và bài kiểm đọc được mà không phải bắt log.
+let degradedSince = null;
+
 export async function getEntitlements(tenantId) {
   const db = getDb();
   const t = await db.prepare('SELECT plan, feature_flags FROM tenants WHERE id = ?').getAsync(tenantId);
-  const plan = PLANS.includes(t?.plan) ? t.plan : 'enterprise';
+  const raw = normalizePlan(t?.plan);
+  const known = PLANS.includes(raw);
+
+  // Không đọc được (t bị xoá / RLS chặn) hoặc plan lạ → Small, **có ghi log**.
+  // Im lặng thì sẽ biến thành "mất tính năng không rõ nguyên nhân", và người ta
+  // chỉ phát hiện khi có người dùng kêu.
+  const plan = known ? raw : 'small';
+  if (!known) {
+    if (degradedSince === null) {
+      degradedSince = new Date().toISOString();
+      console.warn(
+        `[entitlements] tenant=${tenantId} plan không đọc được hoặc lạ `
+        + `(${JSON.stringify(t?.plan ?? null)}) → hạ về 'small' (chỉ tính năng cơ bản). `
+        + 'Đây là fail-closed: mất tính năng còn hơn mở khoá nhầm. Kiểm tra lại '
+        + 'bảng `tenants` và kết nối của app role.',
+      );
+    }
+  }
   const features = [...applyOverrides(featuresForPlan(plan), t?.feature_flags)].sort();
   return { plan, features };
 }
+
+// Cho monitor kiểm tra: có tenant nào đang bị hạ cấp vì lỗi đọc không.
+export const entitlementsDegradedSince = () => degradedSince;
 
 export function hasFeature(entitlements, flag) {
   return Array.isArray(entitlements?.features) && entitlements.features.includes(flag);
@@ -93,7 +131,7 @@ export function requireAnyFeature(...flags) {
       req.entitlements = ent;
       next();
     } catch (e) {
-      return res.status(500).json({ error: e.message });
+      return res.status(e.status || 500).json(errorBody(e));
     }
   };
 }
@@ -110,7 +148,7 @@ export function requireFeature(flag) {
       req.entitlements = ent;
       next();
     } catch (e) {
-      return res.status(500).json({ error: e.message });
+      return res.status(e.status || 500).json(errorBody(e));
     }
   };
 }

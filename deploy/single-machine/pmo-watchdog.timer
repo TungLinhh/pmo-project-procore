@@ -1,0 +1,14 @@
+[Unit]
+Description=PMO — gọi /api/ready mỗi 30 giây và tự phục hồi nếu Postgres chết
+Documentation=file:///home/vutun/pmo_project_procore/deploy/single-machine/README.md
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=45s
+# Rải nhẹ: mọi lần chạy đều mở một TCP tới :3000. 30s là đủ sớm để người dùng không
+# nhận ra, và rẻ hơn nhiều so với 10s.
+AccuracySec=5s
+Unit=pmo-watchdog.service
+
+[Install]
+WantedBy=timers.target

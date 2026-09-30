@@ -1,6 +1,11 @@
 // Schedule derived status: status comes from progress_pct/actual_end_date, never from
 // the raw source "Tình trạng" text (which mapped stray 'x'/'1' marks to DONE — 160 bogus rows on BTE).
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/schedule-derived-status.mjs
+import { cleanupProjectsOnExit } from './lib-cleanup.mjs';
+import { writeFileSync } from 'node:fs';
+
+// Dọn dự án thử nghiệm nếu bài dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupProjectsOnExit(['SCHED-ST-%'], { label: 'schedule-derived-status' });
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const XLSX = (await import('xlsx')).default;
 const { parse, commit } = await import('../../backend/src/services/ingest/construction_schedule.js');
@@ -21,7 +26,7 @@ XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
   [5, 'Epsilon', 0, 'yes'],    // zero + 'yes' must NOT force DONE → PENDING
   [null, 'BOH', null, ''],     // zone-title label row → skipped
 ]), 'TD');
-XLSX.writeFile(wb, FP);
+writeFileSync(FP, XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
 
 const parsed = await parse(FP, 1, 'T1');
 const rows = parsed.sheets[0]?.rows || [];
@@ -48,10 +53,10 @@ ok(sByName.Alpha?.source_status === 'x', 'source_status persisted');
 ok(sByName.Zeta?.status === 'DONE', 'actual_end_date forces DONE at 0%');
 // note: commit() trusts caller-provided status; derivation lives in parseRow (single place).
 
-// cleanup
-await db.prepare('DELETE FROM construction_schedule_items WHERE project_id = ?').runAsync(proj.id);
-await db.prepare('DELETE FROM zones WHERE project_id = ?').runAsync(proj.id);
-await db.prepare('DELETE FROM projects WHERE id = ?').runAsync(proj.id);
+// Dọn: **không** xoá tay. Bản cũ xoá `construction_schedule_items`, `zones`, `projects`
+// và bỏ sót `work_items` mà `commit()` vừa tạo ⇒ `work_items_project_id_projects_id_fk`
+// vi phạm và bài chết ngay sau khi mọi khẳng định đã xanh (đo 2026-09-28). Dùng helper
+// đã biết thứ tự bảng con, chạy ở `exit` nên bài dừng giữa chừng vẫn sạch.
 await closeDb();
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');

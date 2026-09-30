@@ -1,20 +1,49 @@
 // Permission Matrix — canonical role model (see PERMISSION_MATRIX below).
-// Roles: ADMIN, CEO (is_ceo flag), PM, PMO, SITE, PROCUREMENT, ACCOUNTING.
+// Roles: ADMIN, CEO (is_ceo flag), PM, PMO, SITE, TECHNICAL, PROCUREMENT, ACCOUNTING.
 // Matrix: role × module × action × scope (all | own | assigned | false).
-// Modules: schedule, shop, material, payment, issue, master_data, kpi, directive, approval, audit, file_upload
-// Actions: read, write, approve
+// Modules: schedule, shop, material, payment, issue, master_data, kpi, directive,
+//          approval, audit, file_upload, daily_report, contract, invoice, control,
+//          work_item  (16 — danh sách này trước đây thiếu 3 module cuối, đọc dễ tin
+//          rằng `daily_report`/`contract`/`invoice` nằm ngoài ma trận)
+// Actions: read, write, approve, apply (`control` còn có `apply` cho kịch bản pillar)
 // Scope: all | own (project mình quản lý) | assigned (nơi được gán)
+//
+// PHẠM VI: ma trận phủ 16 module nghiệp vụ. Các hệ thống ngoài danh sách này
+// (`bim`, `jobs`, `erp`, `ai`, `admin`, `sso`, `manpower-plan`, `kpi-targets`) KHÔNG
+// đi qua `canAccess()` — chúng chỉ chốt bằng `requireRole(...)` ở route. Đo 2026-09-28
+// bằng `scripts/list-unmatrixed-writes.mjs`: 117 route ghi không gọi `requirePermission`,
+// trong đó 28 mở cho `ceo` mà ma trận chỉ cho CEO ghi ở `directive`/`approval`/`control`.
+// Xem `docs/DATA_DECISIONS_REQUIRED.md` mục 16 — cần người ký, tôi không tự quyết.
 import { getDb } from '../db/index.js';
 
 export const PERMISSION_MATRIX = {
+  // Technical/design: owns pillar 1 on assigned projects, no control layer.
+  TECHNICAL: {
+    schedule: { read: 'assigned', write: false },
+    shop: { read: 'assigned', write: 'assigned', approve: false },
+    material: { read: 'assigned', write: false },
+    payment: { read: 'assigned', write: false },
+    issue: { read: 'assigned', write: 'assigned' },
+    master_data: { read: 'assigned', write: false },
+    kpi: { read: 'assigned', write: false },
+    directive: { read: 'assigned', write: false },
+    approval: { read: 'assigned', write: false },
+    audit: { read: 'assigned', write: false },
+    file_upload: { read: 'assigned', write: 'assigned' },
+    daily_report: { read: 'assigned', write: 'assigned' },
+    contract: { read: 'assigned', write: false },
+    invoice: { read: 'assigned', write: false },
+    control: { read: false, write: false, apply: false },
+    work_item: { read: 'assigned', write: 'assigned' },
+  },
   // PM: Toàn bộ module, project mình quản lý
   //      Ghi: Schedule, Issue, Daily progress trong project mình
   //      Duyệt: Shop drawing, Material submittal (project mình)
   PM: {
     schedule: { read: 'own', write: 'own' },
     shop: { read: 'own', write: 'own', approve: 'own' },
-    material: { read: 'own', write: 'own' },
-    payment: { read: 'own', write: false },
+    material: { read: 'own', write: 'own', approve: 'own' },
+    payment: { read: 'own', write: 'own', approve: 'own' },
     issue: { read: 'own', write: 'own' },
     master_data: { read: 'own', write: false },
     kpi: { read: 'own', write: false },
@@ -25,32 +54,34 @@ export const PERMISSION_MATRIX = {
     daily_report: { read: 'own', write: 'own' },
     contract: { read: 'own', write: false },
     invoice: { read: 'own', write: false },
+    control: { read: 'own', write: 'own', apply: false },
+    work_item: { read: 'own', write: 'own' },
   },
-  // PMO: Toàn bộ module, mọi project
-  //      Ghi: KPI target, Master data
-  //      Duyệt: Không duyệt nghiệp vụ, chỉ xem portfolio
+  // PMO: quản lý và kiểm soát các project được phân công.
   PMO: {
-    schedule: { read: 'all', write: false },
-    shop: { read: 'all', write: false, approve: false },
-    material: { read: 'all', write: false },
-    payment: { read: 'all', write: false },
-    issue: { read: 'all', write: false },
-    master_data: { read: 'all', write: 'all' },
-    kpi: { read: 'all', write: 'all' },
-    directive: { read: 'all', write: 'all' },
-    approval: { read: 'all', write: false },
-    audit: { read: 'all', write: false },
-    file_upload: { read: 'all', write: 'all' },
-    daily_report: { read: 'all', write: false },
-    contract: { read: 'all', write: false },
-    invoice: { read: 'all', write: false },
+    schedule: { read: 'assigned', write: false },
+    shop: { read: 'assigned', write: false, approve: 'assigned' },
+    material: { read: 'assigned', write: false, approve: 'assigned' },
+    payment: { read: 'assigned', write: 'assigned', approve: 'assigned' },
+    issue: { read: 'assigned', write: false },
+    master_data: { read: 'assigned', write: 'assigned' },
+    kpi: { read: 'assigned', write: 'assigned' },
+    directive: { read: 'assigned', write: 'assigned' },
+    approval: { read: 'assigned', write: false },
+    audit: { read: 'assigned', write: false },
+    file_upload: { read: 'assigned', write: 'assigned' },
+    daily_report: { read: 'assigned', write: false },
+    contract: { read: 'assigned', write: false },
+    invoice: { read: 'assigned', write: false },
+    control: { read: 'assigned', write: 'assigned', apply: false },
+    work_item: { read: 'assigned', write: 'assigned' },
   },
   // Site: Project/zone được gán
   //       Ghi: Daily progress, Material, Issue, Photo (chỉ nơi được gán)
   //       Duyệt: Không
   SITE: {
     schedule: { read: 'assigned', write: 'assigned' }, // site cập nhật % tiến độ (PATCH item), không sửa bulk
-    shop: { read: 'assigned', write: false, approve: false },
+    shop: { read: 'assigned', write: 'assigned', approve: false },
     material: { read: 'assigned', write: 'assigned' },
     payment: { read: false, write: false },
     issue: { read: 'assigned', write: 'assigned' },
@@ -63,44 +94,46 @@ export const PERMISSION_MATRIX = {
     daily_report: { read: 'assigned', write: 'assigned' },
     contract: { read: false, write: false },
     invoice: { read: false, write: false },
+    control: { read: false, write: false, apply: false },
+    work_item: { read: 'assigned', write: 'assigned' },
   },
-  // Procurement: Material, Supplier, Subcontractor, mọi project
-  //              Ghi: Material submittal, Supplier, Subcontractor
-  //              Duyệt: Không
+  // Procurement: vật tư được phân công, không dùng Control Layer.
   PROCUREMENT: {
-    schedule: { read: 'all', write: false },
-    shop: { read: 'all', write: false, approve: false },
-    material: { read: 'all', write: 'all' },
-    payment: { read: 'all', write: false },
-    issue: { read: 'all', write: false },
-    master_data: { read: 'all', write: 'all' },
-    kpi: { read: 'all', write: false },
-    directive: { read: 'all', write: false },
+    schedule: { read: 'assigned', write: false },
+    shop: { read: 'assigned', write: false, approve: false },
+    material: { read: 'assigned', write: 'assigned' },
+    payment: { read: 'assigned', write: false },
+    issue: { read: 'assigned', write: false },
+    master_data: { read: 'assigned', write: 'assigned' },
+    kpi: { read: 'assigned', write: false },
+    directive: { read: 'assigned', write: false },
     approval: { read: false, write: false },
-    audit: { read: 'all', write: false },
-    file_upload: { read: 'all', write: 'all' },
-    daily_report: { read: 'all', write: false },
-    contract: { read: 'all', write: false },
-    invoice: { read: 'all', write: false },
+    audit: { read: 'assigned', write: false },
+    file_upload: { read: 'assigned', write: 'assigned' },
+    daily_report: { read: 'assigned', write: false },
+    contract: { read: 'assigned', write: false },
+    invoice: { read: 'assigned', write: false },
+    control: { read: false, write: false, apply: false },
+    work_item: { read: 'assigned', write: false },
   },
-  // Accounting: Contract, Invoice, Payment, mọi project
-  //             Ghi: Contract, Invoice, Payment request
-  //             Duyệt: Không
+  // Accounting: hồ sơ thanh toán được phân công, không dùng Control Layer.
   ACCOUNTING: {
-    schedule: { read: 'all', write: false },
-    shop: { read: 'all', write: false, approve: false },
-    material: { read: 'all', write: false },
-    payment: { read: 'all', write: 'all' },
-    issue: { read: 'all', write: false },
-    master_data: { read: 'all', write: false },
-    kpi: { read: 'all', write: false },
-    directive: { read: 'all', write: false },
-    approval: { read: 'all', write: false },
-    audit: { read: 'all', write: false },
-    file_upload: { read: 'all', write: 'all' },
-    daily_report: { read: 'all', write: false },
-    contract: { read: 'all', write: 'all' },
-    invoice: { read: 'all', write: 'all' },
+    schedule: { read: 'assigned', write: false },
+    shop: { read: 'assigned', write: false, approve: false },
+    material: { read: 'assigned', write: false },
+    payment: { read: 'assigned', write: 'assigned', approve: 'assigned' },
+    issue: { read: 'assigned', write: false },
+    master_data: { read: 'assigned', write: false },
+    kpi: { read: 'assigned', write: false },
+    directive: { read: 'assigned', write: false },
+    approval: { read: 'assigned', write: false },
+    audit: { read: 'assigned', write: false },
+    file_upload: { read: 'assigned', write: 'assigned' },
+    daily_report: { read: 'assigned', write: false },
+    contract: { read: 'assigned', write: 'assigned' },
+    invoice: { read: 'assigned', write: 'assigned' },
+    control: { read: false, write: false, apply: false },
+    work_item: { read: 'assigned', write: false },
   },
   // CEO: Toàn bộ
   //      Ghi: Chỉ Directive
@@ -120,11 +153,14 @@ export const PERMISSION_MATRIX = {
     daily_report: { read: 'all', write: false },
     contract: { read: 'all', write: false },
     invoice: { read: 'all', write: false },
+    control: { read: 'all', write: 'all', apply: 'all' },
+    work_item: { read: 'all', write: false },
   },
 };
 
-// Admin/CEO bypass: full access mọi module mọi action
-export const FULL_ACCESS_ROLES = ['ADMIN', 'CEO'];
+// Admin bypasses the matrix. CEO keeps the SRS approval/control scope and
+// must not gain ordinary data-entry privileges through a middleware shortcut.
+export const FULL_ACCESS_ROLES = ['ADMIN'];
 
 export function getPermissions(role) {
   if (FULL_ACCESS_ROLES.includes(role?.toUpperCase())) {
@@ -139,7 +175,7 @@ export function getPermissions(role) {
 }
 
 // Check if user can perform action on module in a specific project scope.
-// Roles 'ADMIN'/'CEO' (resolved by the caller from role + is_ceo) bypass.
+// Admin bypasses the matrix. CEO and PMO use explicit SRS scopes.
 // projectId: optional — null means list-level (scope not checkable, module gate only).
 //   'own'      = project.pm_user_id matches, or member (membership is operational source)
 //   'assigned' = project_members row

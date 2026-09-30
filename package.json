@@ -21,11 +21,26 @@
     "test:schema": "node tests/e2e/schema.mjs",
     "test:browser": "node tests/e2e/browser.mjs",
     "test:all": "npm test && npm run test:browser && node tests/tools/schema-audit.mjs",
+    "test:srs": "node scripts/run-srs-gate.mjs",
+    "test:ai": "node tests/e2e/ai-srs-evaluation.mjs",
+    "test:ai-progress": "node tests/e2e/ai-progress-proposals.mjs",
+    "test:ai-progress-concurrency": "node tests/e2e/ai-progress-concurrency.mjs",
+    "test:sp-ap": "node tests/e2e/sp-ap-unknown-payment.mjs",
+    "test:release": "node scripts/release-gate.mjs",
+    "test:monitoring": "node tests/e2e/monitoring.mjs",
+    "test:retention": "node tests/e2e/retention.mjs",
+    "test:security": "node tests/e2e/refresh-reuse.mjs && node tests/e2e/realtime.mjs && node tests/e2e/secrets-hygiene.mjs",
+    "test:reconcile": "node tests/e2e/reconcile-values.mjs",
+    "storage:gc": "node scripts/storage-gc.mjs",
     "lint": "npm run lint --workspaces --if-present",
     "audit:schema": "node tests/tools/schema-audit.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
-    "concurrently": "^9.0.1"
+    "concurrently": "^9.0.1",
+    "xlsx": "npm:@e965/xlsx@^0.20.3"
+  },
+  "overrides": {
+    "qs": "6.16.0"
   }
 }

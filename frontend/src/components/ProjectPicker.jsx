@@ -11,8 +11,9 @@
 
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { projects as api } from '../api/index.js';
+import { t } from '../i18n/index.js';
 
-export default function ProjectPicker({ value, onChange, placeholder = 'Chọn dự án...', allowAll = false }) {
+export default function ProjectPicker({ value, onChange, placeholder = t('pp.pick_project_ph'), allowAll = false }) {
   const [projects, setProjects] = useState([]);
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
@@ -31,7 +32,7 @@ export default function ProjectPicker({ value, onChange, placeholder = 'Chọn d
           setProjects(list);
           setLoading(false);
         }
-      } catch (e) {
+      } catch {
         if (!cancelled) setLoading(false);
       }
     })();
@@ -83,7 +84,7 @@ export default function ProjectPicker({ value, onChange, placeholder = 'Chọn d
         type="text"
         className="project-picker-input"
         value={open ? search : (selected ? `${selected.code} — ${selected.name_vi || selected.name_en}` : '')}
-        placeholder={loading ? 'Đang tải...' : placeholder}
+        placeholder={loading ? t('pp.busy_loading') : placeholder}
         onChange={e => { setSearch(e.target.value); setOpen(true); setHighlight(0); }}
         onFocus={() => { setOpen(true); setSearch(''); }}
         onKeyDown={onKeyDown}
@@ -95,12 +96,10 @@ export default function ProjectPicker({ value, onChange, placeholder = 'Chọn d
             <div
               className={`project-picker-item ${numValue === null ? 'active' : ''}`}
               onMouseDown={() => choose(null)}
-            >
-              Tất cả dự án
-            </div>
+            >{t('pp.lbl_all')}</div>
           )}
           {filtered.length === 0 && (
-            <div className="project-picker-empty">Không tìm thấy</div>
+            <div className="project-picker-empty">{t('pp.empty')}</div>
           )}
           {filtered.map((p, idx) => (
             <div

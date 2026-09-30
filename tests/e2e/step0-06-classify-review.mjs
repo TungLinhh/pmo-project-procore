@@ -1,5 +1,6 @@
 // STEP0-06: classify endpoint + review queue source (live, BTE-shaped paths).
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/step0-06-classify-review.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 
@@ -8,7 +9,7 @@ const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`);
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3215';
 
-const require = createRequire('/home/vutun/pmo_project/backend/package.json');
+const require = createRequire(new URL('../../backend/package.json', import.meta.url));
 const XLSX = require('xlsx');
 const wb = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['STT', 'X', `run-${Date.now()}`], [1, 'a']]), 'S1');
@@ -20,7 +21,7 @@ const xlsxBuf2 = Buffer.from(XLSX.write(wb2, { type: 'buffer', bookType: 'xlsx' 
 const bodies = [xlsxBuf, xlsxBuf2, null];
 
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3215' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) });
   const { token } = await login.json();
@@ -53,7 +54,14 @@ try {
   ok(byRel['P/notes.txt']?.classification.family === 'unknown', 'unknown stays unknown');
   ok(byRel['P/TIẾN ĐỘ SHOP/MEP-BTE-SHD-BOH.xlsx']?.classification.probe?.empty === false, 'probe reports non-empty workbook');
 
-  const rev = await fetch(BASE + '/api/uploads/review', { headers: H }).then(r => r.json());
+  // `GET /api/uploads/review` trả **object** `{rows, limit, offset, scanned,
+  // skipped_no_access, has_more}`, không phải mảng thô: server quét theo lô tới khi đủ
+  // dòng người đó được xem, nên `LIMIT` cắt trước khi lọc quyền sẽ làm hàng đợi trông
+  // rỗng. Bài này còn dùng mảng thứ nên `rev.some is not a function` và **cả nhóm
+  // khẳng định phía trên cũng không chạy** — đây là lỗi của bài kiểm, không phải API.
+  const revBody = await fetch(BASE + '/api/uploads/review', { headers: H }).then(r => r.json());
+  ok(!Array.isArray(revBody) && Array.isArray(revBody.rows), 'review response is {rows, …} not a bare array');
+  const rev = revBody.rows;
   ok(rev.some(r => ids.includes(r.id) && r.classification?.family === 'shop'), 'review queue exposes classification');
   ok(rev.find(r => r.relative_path === 'P/TIẾN ĐỘ SHOP/MEP-BTE-SHD-BOH.xlsx')?.expected_doc_type === 'shop_drawing', 'doc_type guess persisted for wizard prefill');
 } finally {

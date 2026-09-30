@@ -56,12 +56,3 @@ export const WORKFLOW_COLORS = {
   [WORKFLOW.OVERDUE]: { bg: '#fce8e6', fg: '#c5221f' },
   [WORKFLOW.CLOSED]: { bg: '#e0e0e0', fg: '#5f6368' },
 };
-
-export function healthOf(project) {
-  // MVP: simple heuristic based on progress vs plan
-  if (!project.progress_pct && project.progress_pct !== 0) return HEALTH.ON_TRACK;
-  if (project.progress_pct >= 90) return HEALTH.ON_TRACK;
-  if (project.progress_pct >= 70) return HEALTH.WATCH;
-  if (project.progress_pct >= 50) return HEALTH.BEHIND;
-  return HEALTH.CRITICAL;
-}

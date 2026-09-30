@@ -1,16 +1,21 @@
 // P1-4: dead spots wired — daily photo download round-trips bytes, master-data
 // create works, /field/wbs redirects to material. Real PG + server.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p1-deadspots.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { cleanupProjectsOnExit } from './lib-cleanup.mjs';
 
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3107';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3107' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 
+
+// Dọn dự án thử nghiệm nếu bài dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupProjectsOnExit(['P1-DS-%'], { label: 'p1-deadspots' });
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) });
   const { token } = await login.json();
@@ -33,12 +38,13 @@ try {
   ok(missing === 404, 'unknown photo → 404');
 
   // 2. master-data create (MasterDataEdit Lưu)
-  const v = await post('/api/master-data/vendors', { tenant_id: 1, code: `V-${Date.now()}`, name: 'Deadspot Vendor' });
-  ok(v.s === 200 && v.j.id, `vendor created (got ${v.s} id=${v.j.id})`);
+  const injectedId = 999999;
+  const v = await post('/api/master-data/vendors', { id: injectedId, tenant_id: 999, code: `V-${Date.now()}`, name: 'Deadspot Vendor' });
+  ok(v.s === 201 && v.j.id && v.j.id !== injectedId && v.j.tenant_id === 1, `vendor create ignores injected identity (got ${v.s} id=${v.j.id} tenant=${v.j.tenant_id})`);
 
   // 3. /field/wbs redirects (static: dead stub route retired)
   const app = readFileSync('frontend/src/App.jsx', 'utf8');
-  ok(app.includes('path="wbs" element={<Navigate to="../material"'), '/field/wbs redirects to material');
+  ok(app.includes('path="wbs" element={<Navigate to="/field/material"'), '/field/wbs redirects inside /field');
 
   const { getDb } = await import('../../backend/src/db/index.js');
   const db = getDb();

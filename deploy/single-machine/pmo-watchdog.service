@@ -1,0 +1,18 @@
+# Canh gác DB cho bản chạy trực tiếp (không Docker).
+#
+# Vì sao cần: trên container có compose healthcheck gọi `/api/ready` mỗi 30 giây. Chạy
+# bằng Node thì **không có gì** gọi cả — chỉ có người phát hiện khi đăng nhập không được.
+# Đã xảy ra thật (ghi trong `scripts/db-watchdog.mjs`): PostgreSQL bị kill lúc 07:55 UTC,
+# phát hiện lúc 19:38 ⇒ demo hỏng im lặng gần 12 giờ. `/api/health` vẫn trả 200 suốt vì
+# đúng thiết kế nó **không** chạm DB — nên phải dùng `/api/ready`.
+
+[Unit]
+Description=PMO — canh gác Postgres qua /api/ready
+Documentation=file:///home/vutun/pmo_project_procore/deploy/single-machine/README.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/vutun/pmo_project_procore
+ExecStart=/usr/bin/node scripts/db-watchdog.mjs --heal
+# Không đánh dấu `Restart` — đây là timer, lần sau tự chạy lại.
+TimeoutStartSec=240

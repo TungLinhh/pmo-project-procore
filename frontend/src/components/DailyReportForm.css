@@ -1,6 +1,6 @@
 /* Daily report form + photo gallery */
 .daily-report-form {
-  background: #fff;
+  background: var(--c-surface);
   border-radius: 8px;
   padding: 20px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.05);
@@ -8,14 +8,14 @@
 
 .daily-report-form h3 {
   margin: 0 0 16px;
-  color: #2c3e50;
+  color: var(--c-text);
 }
 
 .daily-report-form .form-step label {
   display: block;
   margin: 12px 0 4px;
   font-size: 13px;
-  color: #4a5568;
+  color: var(--c-text-2);
   font-weight: 500;
 }
 
@@ -23,14 +23,14 @@
 .daily-report-form textarea {
   width: 100%;
   padding: 8px 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-radius: 6px;
   font-size: 14px;
 }
 
 .daily-report-form .btn-primary {
-  background: #3182ce;
-  color: #fff;
+  background: var(--c-accent);
+  color: var(--c-text-i);
   border: none;
   padding: 10px 20px;
   border-radius: 6px;
@@ -39,7 +39,7 @@
 }
 
 .daily-report-form .btn-secondary {
-  background: #edf2f7;
+  background: var(--c-surface-2);
   color: #2d3748;
   border: none;
   padding: 6px 14px;
@@ -75,7 +75,7 @@
 .daily-report-form .section h4 {
   margin: 0 0 10px;
   font-size: 14px;
-  color: #2c3e50;
+  color: var(--c-text);
 }
 
 .photo-gallery {
@@ -90,7 +90,7 @@
   aspect-ratio: 1;
   border-radius: 6px;
   overflow: hidden;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .photo-thumb img {
@@ -104,3 +104,7 @@
   border-color: #3182ce;
   box-shadow: 0 2px 8px rgba(49,130,206,0.2);
 }
+
+/* ====== Dark mode ======
+   File này từng hard-code nền trắng + màu chữ xám, nên trong dark mode nền
+   vẫn trắng và chữ sáng trên nền sáng → tương phản ~1.2:1. Dùng token. */

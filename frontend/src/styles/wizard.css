@@ -150,23 +150,56 @@
 }
 .wizard-footer-spacer { flex: 1; }
 
-.btn-primary, .btn-primary-sm {
+/* Button set is scoped to the wizard so bare className="btn-secondary" /
+   "btn-text" on non-wizard pages no longer inherits wizard sizing. */
+.wizard-modal .btn-primary, .wizard-modal .btn-primary-sm {
   background: var(--c-accent, #2563eb);
   color: white; border: none; border-radius: 6px;
   padding: 8px 16px; font-size: 14px; font-weight: 500;
   cursor: pointer;
 }
-.btn-primary-sm { padding: 6px 12px; font-size: 13px; }
-.btn-primary:hover:not(:disabled) { background: var(--c-accent-hover, #1d4ed8); }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-secondary {
+.wizard-modal .btn-primary-sm { padding: 6px 12px; font-size: 13px; }
+.wizard-modal .btn-primary:hover:not(:disabled) { background: var(--c-accent-hover, #1d4ed8); }
+.wizard-modal .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.wizard-modal .btn-secondary {
   background: var(--c-surface); color: var(--c-text);
   border: 1px solid var(--c-border); border-radius: 6px;
   padding: 8px 16px; font-size: 14px; cursor: pointer;
 }
-.btn-secondary:hover { background: var(--c-surface-3); }
-.btn-text {
+.wizard-modal .btn-secondary:hover { background: var(--c-surface-3); }
+.wizard-modal .btn-text {
   background: transparent; border: none; color: var(--c-accent, #2563eb);
   cursor: pointer; font-size: 13px; padding: 4px 8px; border-radius: 4px;
 }
-.btn-text:hover { background: var(--c-surface-3); }
+.wizard-modal .btn-text:hover { background: var(--c-surface-3); }
+
+/* Mobile: the step bar must scroll, the create-project grid must stack,
+   the stat row must wrap, and the footer must use dvh so the primary
+   action never hides behind a collapsing browser URL bar. */
+@media (max-width: 768px) {
+  .wizard-overlay { padding: 0; align-items: stretch; }
+  .wizard-modal {
+    max-width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+  .wizard-header, .wizard-footer, .wizard-body, .wizard-steps { padding-left: 14px; padding-right: 14px; }
+  .wizard-steps {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .wizard-steps::-webkit-scrollbar { display: none; }
+  .wizard-step { flex: 0 0 auto; }
+  .wizard-step-label { font-size: 12px; }
+  .wizard-body { padding-top: 16px; padding-bottom: 16px; }
+  .wizard-inline-form { grid-template-columns: 1fr; }
+  .wizard-field-row { flex-wrap: wrap; }
+  .wizard-result-stats { flex-wrap: wrap; gap: 12px 20px; }
+  .wizard-footer { flex-wrap: wrap; }
+  .wizard-footer .btn-primary, .wizard-footer .btn-secondary { flex: 1 1 140px; min-height: 44px; }
+  .wizard-dropzone { padding: 32px 14px; }
+  .wizard-dropzone-icon { font-size: 36px; }
+  .wizard-close { width: 44px; height: 44px; }
+}

@@ -1,19 +1,23 @@
-// Upload Wizard — Mô hình A: 4 bước
 //   1. Upload file (POST /api/upload, returns upload_id)
 //   2. Configure: project_id, zone_id, doc_type (POST /api/upload/:id/configure)
 //   3. Preview: hiển thị parsed rows (từ response configure)
 //   4. Commit: insert vào DB (POST /api/upload/:id/commit)
 //
 // Props: open, onClose, onDone (callback khi commit xong), defaultProjectId (optional)
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { uploads, projects as apiProjects } from '../api/index.js';
 import { toast } from './Toast.jsx';
+import { t, useLang } from '../i18n/index.js';
 
-const STEPS = ['Upload', 'Cấu hình', 'Xem trước', 'Hoàn tất'];
+function steps() {
+  return ['Upload', t('up.step_configure'), t('up.preview'), t('up.done')];
+}
 
 export default function UploadWizard({ open, onClose, onDone, defaultProjectId, startBulk }) {
+  useLang(); // nhãn trong wizard phải đổi theo nút [VI|EN] khi đang mở
   const [step, setStep] = useState(0);
   const [file, setFile] = useState(null);
+  const fileInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
   const [uploadId, setUploadId] = useState(null);
 
@@ -48,8 +52,8 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
   // Load projects + doc types on mount
   useEffect(() => {
     if (!open) return;
-    apiProjects.list().then(setProjects).catch(e => toast.error('Lỗi tải dự án: ' + e.message));
-    uploads.wizard.docTypes().then(setDocTypes).catch(e => toast.error('Lỗi tải doc types: ' + e.message));
+    apiProjects.list().then(setProjects).catch(e => toast.error(t('up.err_projects') + e.message));
+    uploads.wizard.docTypes().then(setDocTypes).catch(e => toast.error(t('up.err_doctypes') + e.message));
     // Auto-detect doc type from filename
   }, [open]);
 
@@ -78,10 +82,13 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
     }
   }, [open, defaultProjectId]);
 
-  // Auto-suggest doc_type from filename
+  // Auto-suggest doc_type from filename.
+  // Token ngắn (td/msa/mpm/hstt/mcr/rfa/bql) phải đứng riêng (ngăn cách bởi
+  // ký tự không phải chữ) — includes() trần bắt nhầm ("outdoor" → td...).
   useEffect(() => {
     if (!file || docType) return;
     const fn = file.name.toLowerCase();
+    const tok = (t) => new RegExp(`(^|[^a-zà-ỹ])${t}($|[^a-zà-ỹ])`).test(fn);
     // S&P supplier-payment files live among VẬT TƯ names — must win over material_supply.
     if (/s\s*&\s*p|supplier.*pay|cong no.*ncc|thanh toan.*ncc/i.test(file.name)) {
       const sp = docTypes.find(d => d.id === 'supplier_payment');
@@ -89,15 +96,15 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
     }
     const guess = docTypes.find(d => {
       const id = d.id.toLowerCase();
-      if (id === 'shop_drawing' && (fn.includes('shop') || fn.includes('bql') || fn.includes('shd-'))) return true;
-      if (id === 'construction_schedule' && (fn.includes('tđ') || fn.includes('td') || fn.includes('schedule') || fn.includes('csp-'))) return true;
-      if (id === 'material_supply' && (fn.includes('vật tư') || fn.includes('vat tu') || fn.includes('msa'))) return true;
-      if (id === 'rfa_log' && (fn.includes('mcr') || fn.includes('rfa') || fn.includes('duyệt khác') || fn.includes('duyet khac'))) return true;
+      if (id === 'shop_drawing' && (fn.includes('shop') || tok('bql') || fn.includes('shd-'))) return true;
+      if (id === 'construction_schedule' && (fn.includes('tđ') || tok('td') || fn.includes('schedule') || fn.includes('csp-'))) return true;
+      if (id === 'material_supply' && (fn.includes('vật tư') || fn.includes('vat tu') || tok('msa'))) return true;
+      if (id === 'rfa_log' && (tok('mcr') || tok('rfa') || fn.includes('duyệt khác') || fn.includes('duyet khac'))) return true;
       if (id === 'work_breakdown' && fn.includes('cây')) return true;
       if (id === 'daily_report' && (fn.includes('báo cáo') || fn.includes('bao cao') || fn.includes('daily'))) return true;
       if (id === 'business_process' && fn.includes('quy trình')) return true;
       if (id === 'payment_progress' && (fn.includes('thanh toán') || fn.includes('thanh toan'))) return true;
-      if (id === 'payment_ar' && (fn.includes('bãi tràm') || fn.includes('bai tram') || fn.includes('mpm') || fn.includes('hstt') || fn.includes('phải thu') || fn.includes('phai thu') || fn.includes('công nợ'))) return true;
+      if (id === 'payment_ar' && (fn.includes('bãi tràm') || fn.includes('bai tram') || tok('mpm') || tok('hstt') || fn.includes('phải thu') || fn.includes('phai thu') || fn.includes('công nợ'))) return true;
       if (id === 'subcontractor_directory' && fn.includes('thầu phụ')) return true;
       if (id === 'resource_directory' && fn.includes('nguồn lực')) return true;
       return false;
@@ -114,7 +121,7 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
       setUploadId(r.upload_id);
       setStep(1);
     } catch (e) {
-      toast.error('Upload lỗi: ' + e.message);
+      toast.error(t('up.err_upload') + e.message);
     } finally {
       setUploading(false);
     }
@@ -135,6 +142,7 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
     // bounded parallelism: 4 at a time
     const workers = [];
     const queue = [...queued];
+    let done = 0; // đếm trực tiếp — bulkFiles trong closure là snapshot trước upload.
     const runOne = async () => {
       while (queue.length) {
         const item = queue.shift();
@@ -142,6 +150,7 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
         try {
           const r = await uploads.upload(item.file, null, { relativePath: item.rel });
           if (r.error || !r.upload_id) throw new Error(r.error || 'No upload_id');
+          done++;
           setBulkFiles(prev => prev.map(p => p === item ? { ...p, state: 'done', upload_id: r.upload_id } : p));
         } catch (e) {
           setBulkFiles(prev => prev.map(p => p === item ? { ...p, state: 'error', error: e.message } : p));
@@ -151,7 +160,6 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
     for (let i = 0; i < 4; i++) workers.push(runOne());
     await Promise.all(workers);
     setBulkBusy(false);
-    const done = bulkFiles.filter(f => f.state === 'done').length;
     toast.success(`Staged ${done} files — tiếp tục ở review queue`);
     if (onDone) onDone({ bulk: true });
   }, [bulkFiles, onDone]);
@@ -170,53 +178,58 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
       toast.success(`Batch: ${r.staged} staged, ${r.skipped} skipped`);
       if (onDone) onDone({ bulk: true, batch: r });
     } catch (e) {
-      toast.error('Batch lỗi: ' + e.message);
+      toast.error(t('up.err_batch') + e.message);
     } finally {
       setBulkBusy(false);
     }
   }, [onDone]);
 
   const handleCreateProject = useCallback(async () => {
-    if (!newProject.code) { toast.error('Nhập project code'); return; }
+    if (!newProject.code) { toast.error(t('up.project_code_ph')); return; }
     try {
       const p = await uploads.createProject(newProject);
       setProjects(prev => [...prev, p]);
       setProjectId(p.id);
       setNewProjectOpen(false);
       setNewProject({ code: '', name_vi: '', package: 'MEP' });
-      toast.success('Đã tạo project ' + p.code);
+      toast.success(t('up.project_created') + p.code);
     } catch (e) {
-      toast.error('Lỗi tạo project: ' + e.message);
+      toast.error(t('up.err_project') + e.message);
     }
   }, [newProject]);
 
   const handleCreateZone = useCallback(async () => {
-    if (!newZone.code || !projectId) { toast.error('Nhập zone code và chọn project'); return; }
+    if (!newZone.code || !projectId) { toast.error(t('up.zone_hint')); return; }
     try {
       const z = await uploads.createZone(projectId, newZone);
       setZones(prev => [...prev, z]);
       setZoneId(z.id);
       setNewZoneOpen(false);
       setNewZone({ code: '', name_vi: '' });
-      toast.success('Đã tạo zone ' + z.code);
+      toast.success(t('up.zone_created') + z.code);
     } catch (e) {
-      toast.error('Lỗi tạo zone: ' + e.message);
+      toast.error(t('up.err_zone') + e.message);
     }
   }, [newZone, projectId]);
 
   const handleConfigure = useCallback(async () => {
-    if (!uploadId || !projectId || !docType) { toast.error('Thiếu project hoặc doc_type'); return; }
+    if (!uploadId || !projectId || !docType) { toast.error(t('up.need_project_doctype')); return; }
     setConfiguring(true);
     try {
       const body = { project_id: Number(projectId), doc_type: docType };
       if (zoneId) body.zone_id = Number(zoneId);
-      else body.new_zone = { code: 'GEN-' + docType.toUpperCase().slice(0, 6) };
+      // Leaving Zone blank must NOT invent a zone code here. The wizard used to
+      // send 'GEN-' + docType.slice(0,6), producing GEN-CONSTR / GEN-SHOP_D /
+      // GEN-RFA_L, while the ingestors' own default is GEN-TD / GEN-SHOP /
+      // GEN-MAT — so the same file landed in a different zone depending on
+      // whether it came through this wizard or the review queue. Omitting the
+      // field lets the ingestor apply its single default.
       const r = await uploads.wizard.configure(uploadId, body);
       if (r.error) throw new Error(r.error);
       setPreview(r);
       setStep(2);
     } catch (e) {
-      toast.error('Configure lỗi: ' + e.message);
+      toast.error(t('up.err_configure') + e.message);
     } finally {
       setConfiguring(false);
     }
@@ -233,7 +246,7 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
       toast.success(`Insert thành công ${r.ok || r.total?.ok || 0} rows`);
       // Don't auto-navigate — let user click "Đóng" to stay in control
     } catch (e) {
-      toast.error('Commit lỗi: ' + e.message);
+      toast.error(t('up.err_commit') + e.message);
     } finally {
       setCommitting(false);
     }
@@ -245,12 +258,12 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
     <div className="wizard-overlay" onClick={onClose}>
       <div className="wizard-modal" onClick={e => e.stopPropagation()}>
         <div className="wizard-header">
-          <h2>Upload Excel</h2>
+          <h2>{t('up.btn_excel')}</h2>
           <button className="wizard-close" onClick={onClose}>✕</button>
         </div>
 
         <div className="wizard-steps">
-          {STEPS.map((s, i) => (
+          {steps().map((s, i) => (
             <div key={s} className={`wizard-step ${i === step ? 'active' : i < step ? 'done' : ''}`}>
               <div className="wizard-step-num">{i < step ? '✓' : i + 1}</div>
               <div className="wizard-step-label">{s}</div>
@@ -263,7 +276,7 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
             <div className="wizard-step-content">
               <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
                 <button className={`btn ${!bulkMode ? '' : 'btn-secondary'}`} onClick={() => setBulkMode(false)}>1 file</button>
-                <button className={`btn ${bulkMode ? '' : 'btn-secondary'}`} onClick={() => setBulkMode(true)}>Nhiều file / cả folder / .zip</button>
+                <button className={`btn ${bulkMode ? '' : 'btn-secondary'}`} onClick={() => setBulkMode(true)}>{t('up.multi_label')}</button>
               </div>
               {!bulkMode ? (
               <div
@@ -282,36 +295,32 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
                   <div>
                     <div className="wizard-file-name">{file.name}</div>
                     <div className="wizard-file-size">{(file.size / 1024).toFixed(1)} KB</div>
-                    <button className="btn-text" onClick={e => { e.stopPropagation(); setFile(null); }}>Chọn file khác</button>
+                    <button className="btn-text" onClick={e => { e.stopPropagation(); setFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}>{t('up.pick_other')}</button>
                   </div>
                 ) : (
                   <div>
                     <div className="wizard-dropzone-icon">📤</div>
-                    <div>Drop Excel file here, hoặc click để chọn</div>
+                    <div>{t('up.drag_drop')}</div>
                     <div className="wizard-dropzone-hint">.xlsx, .xls</div>
                   </div>
                 )}
-                <input id="wizard-file-input" type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={e => setFile(e.target.files[0])} />
+                <input id="wizard-file-input" type="file" ref={fileInputRef} accept=".xlsx,.xls" style={{ display: 'none' }} onChange={e => setFile(e.target.files[0])} />
               </div>
               ) : (
               <div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-                  <label className="btn btn-secondary" style={{ cursor: 'pointer' }}>
-                    Chọn nhiều file
-                    <input type="file" multiple accept=".xlsx,.xls,.zip" style={{ display: 'none' }} onChange={e => {
+                  <label className="btn btn-secondary" style={{ cursor: 'pointer' }}>{t('up.btn_pick_multi')}<input type="file" multiple accept=".xlsx,.xls,.zip" style={{ display: 'none' }} onChange={e => {
                       const list = Array.from(e.target.files || []);
                       const zip = list.find(f => /\.zip$/i.test(f.name));
                       if (zip && list.length === 1) handleZipUpload(zip);
                       else collectFiles(list);
                     }} />
                   </label>
-                  <label className="btn btn-secondary" style={{ cursor: 'pointer' }}>
-                    Chọn cả folder
-                    <input type="file" webkitdirectory="" directory="" style={{ display: 'none' }} onChange={e => collectFiles(e.target.files)} />
+                  <label className="btn btn-secondary" style={{ cursor: 'pointer' }}>{t('up.pick_folder')}<input type="file" webkitdirectory="" directory="" style={{ display: 'none' }} onChange={e => collectFiles(e.target.files)} />
                   </label>
                   {bulkFiles.length > 0 && (
                     <button className="btn" onClick={handleBulkUpload} disabled={bulkBusy}>
-                      {bulkBusy ? 'Đang stage...' : `Stage ${bulkFiles.filter(f => f.state === 'queued' || f.state === 'error').length} files`}
+                      {bulkBusy ? t('up.busy_staging') : `Stage ${bulkFiles.filter(f => f.state === 'queued' || f.state === 'error').length} files`}
                     </button>
                   )}
                 </div>
@@ -326,7 +335,7 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
                       <li key={i}>
                         <div>
                           <div className="label" style={{ fontSize: 11 }}>{f.rel}</div>
-                          <div className="meta">{f.state === 'done' ? `staged #${f.upload_id}` : f.state === 'error' ? (f.error || 'lỗi') : f.state === 'uploading' ? 'đang upload...' : 'chờ stage'}</div>
+                          <div className="meta">{f.state === 'done' ? `staged #${f.upload_id}` : f.state === 'error' ? (f.error || t('up.st_error')) : f.state === 'uploading' ? t('up.busy_uploading') : t('up.st_waiting_stage')}</div>
                         </div>
                         <span className="badge" style={{ fontSize: 10 }}>{f.state}</span>
                       </li>
@@ -334,7 +343,7 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
                   </ul>
                 )}
                 {bulkFiles.length === 0 && !bulkResult && (
-                  <div className="empty">Chọn nhiều .xlsx, cả folder dự án, hoặc 1 file .zip — mỗi file được stage riêng, phân loại ở review queue.</div>
+                  <div className="empty">{t('up.multi_help')}</div>
                 )}
               </div>
               )}
@@ -344,49 +353,49 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
           {step === 1 && (
             <div className="wizard-step-content">
               <div className="wizard-field">
-                <label>Dự án *</label>
+                <label>{t('up.project_req')}</label>
                 {!newProjectOpen ? (
                   <div className="wizard-field-row">
                     <select value={projectId} onChange={e => setProjectId(e.target.value)}>
-                      <option value="">-- Chọn dự án --</option>
+                      <option value="">{t('up.project_ph')}</option>
                       {projects.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name_vi || p.code}</option>)}
                     </select>
-                    <button className="btn-text" onClick={() => setNewProjectOpen(true)}>+ Mới</button>
+                    <button className="btn-text" onClick={() => setNewProjectOpen(true)}>{t('up.btn_new')}</button>
                   </div>
                 ) : (
                   <div className="wizard-inline-form">
                     <input placeholder="Code (vd: BTE-WP5-HBC)" value={newProject.code} onChange={e => setNewProject({ ...newProject, code: e.target.value })} />
-                    <input placeholder="Tên tiếng Việt" value={newProject.name_vi} onChange={e => setNewProject({ ...newProject, name_vi: e.target.value })} />
-                    <button className="btn-primary-sm" onClick={handleCreateProject}>Tạo</button>
-                    <button className="btn-text" onClick={() => setNewProjectOpen(false)}>Hủy</button>
+                    <input placeholder={t('up.zone_new_name')} value={newProject.name_vi} onChange={e => setNewProject({ ...newProject, name_vi: e.target.value })} />
+                    <button className="btn-primary-sm" onClick={handleCreateProject}>{t('up.create')}</button>
+                    <button className="btn-text" onClick={() => setNewProjectOpen(false)}>{t('up.btn_cancel')}</button>
                   </div>
                 )}
               </div>
 
               <div className="wizard-field">
-                <label>Zone</label>
+                <label>{t('g.zone')}</label>
                 {!newZoneOpen ? (
                   <div className="wizard-field-row">
                     <select value={zoneId} onChange={e => setZoneId(e.target.value)} disabled={!projectId}>
-                      <option value="">-- Để trống = tự tạo GEN-* --</option>
+                      <option value="">{t('up.zone_ph')}</option>
                       {zones.map(z => <option key={z.id} value={z.id}>{z.code} — {z.name_vi || z.name_en}</option>)}
                     </select>
-                    {projectId && <button className="btn-text" onClick={() => setNewZoneOpen(true)}>+ Mới</button>}
+                    {projectId && <button className="btn-text" onClick={() => setNewZoneOpen(true)}>{t('up.btn_new')}</button>}
                   </div>
                 ) : (
                   <div className="wizard-inline-form">
                     <input placeholder="Zone code (vd: BOH)" value={newZone.code} onChange={e => setNewZone({ ...newZone, code: e.target.value })} />
-                    <input placeholder="Tên (tùy chọn)" value={newZone.name_vi} onChange={e => setNewZone({ ...newZone, name_vi: e.target.value })} />
-                    <button className="btn-primary-sm" onClick={handleCreateZone}>Tạo</button>
-                    <button className="btn-text" onClick={() => setNewZoneOpen(false)}>Hủy</button>
+                    <input placeholder={t('up.name_optional')} value={newZone.name_vi} onChange={e => setNewZone({ ...newZone, name_vi: e.target.value })} />
+                    <button className="btn-primary-sm" onClick={handleCreateZone}>{t('up.create')}</button>
+                    <button className="btn-text" onClick={() => setNewZoneOpen(false)}>{t('up.btn_cancel')}</button>
                   </div>
                 )}
               </div>
 
               <div className="wizard-field">
-                <label>Loại tài liệu *</label>
-                <select value={docType} onChange={e => setDocType(e.target.value)}>
-                  <option value="">-- Chọn loại --</option>
+                <label>{t('up.doctype_req')}</label>
+                <select data-testid="doc-type-select" value={docType} onChange={e => setDocType(e.target.value)}>
+                  <option value="">{t('up.doctype_ph')}</option>
                   {docTypes.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
                 </select>
               </div>
@@ -397,9 +406,9 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
             <div className="wizard-step-content">
               <div className="wizard-summary">
                 <div className="wizard-summary-row"><span>Project:</span><strong>{preview.project?.code}</strong></div>
-                {preview.zone && <div className="wizard-summary-row"><span>Zone:</span><strong>{preview.zone.code} {preview.zone_auto_created && '(mới tạo)'}</strong></div>}
-                <div className="wizard-summary-row"><span>Loại:</span><strong>{preview.doc_type}</strong></div>
-                <div className="wizard-summary-row"><span>Tổng rows:</span><strong>{preview.total_rows}</strong></div>
+                {preview.zone && <div className="wizard-summary-row"><span>Zone:</span><strong>{preview.zone.code} {preview.zone_auto_created && t('up.zone_new')}</strong></div>}
+                <div className="wizard-summary-row"><span>{t('up.type_label')}</span><strong>{preview.doc_type}</strong></div>
+                <div className="wizard-summary-row"><span>{t('up.lbl_total_rows')}</span><strong>{preview.total_rows}</strong></div>
               </div>
 
               {preview.sheets?.map((s, i) => (
@@ -430,10 +439,10 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
                 <div className={`wizard-result-icon ${result.status === 'SUCCESS' ? 'ok' : 'partial'}`}>
                   {result.status === 'SUCCESS' ? '✓' : '!'}
                 </div>
-                <h3>{result.status === 'SUCCESS' ? 'Insert thành công!' : 'Hoàn tất với lỗi'}</h3>
+                <h3>{result.status === 'SUCCESS' ? t('up.insert_ok') : t('up.done_with_errors')}</h3>
                 <div className="wizard-result-stats">
                   <div><strong>{result.ok ?? result.total?.ok ?? 0}</strong> rows OK</div>
-                  <div><strong>{result.errors ?? result.total?.errors ?? 0}</strong> rows lỗi</div>
+                  <div><strong>{result.errors ?? result.total?.errors ?? 0}</strong>{t('up.lbl_bad_rows')}</div>
                   <div>Zone: <strong>{result.zone || 'N/A'}</strong></div>
                 </div>
               </div>
@@ -442,13 +451,13 @@ export default function UploadWizard({ open, onClose, onDone, defaultProjectId, 
         </div>
 
         <div className="wizard-footer">
-          {step > 0 && step < 3 && <button className="btn-secondary" onClick={() => setStep(s => s - 1)}>← Quay lại</button>}
+          {step > 0 && step < 3 && <button className="btn-secondary" onClick={() => setStep(s => s - 1)}>{t('up.back')}</button>}
           <div className="wizard-footer-spacer" />
-          {step === 0 && !bulkMode && <button className="btn-primary" onClick={handleUpload} disabled={!file || uploading}>{uploading ? 'Uploading...' : 'Upload →'}</button>}
+          {step === 0 && !bulkMode && <button className="btn-primary" onClick={handleUpload} disabled={!file || uploading}>{uploading ? t('g.uploading') : 'Upload →'}</button>}
           {step === 0 && bulkMode && <button className="btn-primary" onClick={onClose}>Xong — sang review queue</button>}
-          {step === 1 && <button className="btn-primary" onClick={handleConfigure} disabled={!projectId || !docType || configuring}>{configuring ? 'Đang parse...' : 'Xem trước →'}</button>}
-          {step === 2 && <button className="btn-primary" onClick={handleCommit} disabled={committing}>{committing ? 'Đang insert...' : 'Xác nhận Insert'}</button>}
-          {step === 3 && <button className="btn-primary" onClick={onClose}>Đóng</button>}
+          {step === 1 && <button data-testid="wizard-configure" className="btn-primary" onClick={handleConfigure} disabled={!projectId || !docType || configuring}>{configuring ? t('up.busy_parsing') : t('up.preview_next')}</button>}
+          {step === 2 && <button className="btn-primary" onClick={handleCommit} disabled={committing}>{committing ? t('up.busy_inserting') : t('up.confirm_insert')}</button>}
+          {step === 3 && <button className="btn-primary" onClick={onClose}>{t('up.close')}</button>}
         </div>
       </div>
     </div>

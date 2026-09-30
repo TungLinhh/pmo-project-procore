@@ -1,3 +1,14 @@
+import { readFileSync, existsSync, statSync } from 'node:fs';
+
+function configure(spec, module) {
+  // The maintained SheetJS ESM build does not auto-bind Node's filesystem.
+  // Bind it once per module instance so readFile works for staged uploads.
+  if (spec === 'xlsx' && typeof module?.set_fs === 'function') {
+    module.set_fs({ readFileSync, existsSync, statSync });
+  }
+  return module;
+}
+
 // Optional heavy/native deps (P2-9): ssh2, @aws-sdk/*, xlsx.
 // A missing dep must surface as 503 naming the package (actionable), never a
 // raw "Cannot find module" 500. Dynamic ESM imports reject with
@@ -5,7 +16,7 @@
 export async function need(spec) {
   try {
     const m = await import(spec);
-    return m.default ?? m;
+    return configure(spec, m.default ?? m);
   } catch (e) {
     const msg = String(e?.message || '');
     if (e?.code === 'ERR_MODULE_NOT_FOUND' || /Cannot find (module|package)/.test(msg)) {
@@ -23,7 +34,7 @@ import { createRequire } from 'node:module';
 export function needSync(spec) {
   try {
     const m = createRequire(import.meta.url)(spec);
-    return m?.default ?? m;
+    return configure(spec, m?.default ?? m);
   } catch {
     return new Proxy({}, {
       get(_t, prop) {

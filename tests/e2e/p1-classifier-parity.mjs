@@ -1,6 +1,7 @@
 // P1-8: single-file detectDocType agrees with bulk classifyFile (no more divergent
 // routes), + POST /api/notifications requires admin/ceo. Real PG + server.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p1-classifier-parity.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
 const { detectDocType } = await import('../../backend/src/lib/excel.js');
 const { classifyFile } = await import('../../backend/src/lib/classify.js');
@@ -29,15 +30,24 @@ for (const [rel, fn] of pairs) {
   const amb = detectDocType('Tiến độ hạng mục.xlsx');
   ok(amb === 'construction_schedule', `ambiguous name defaults to schedule guess (got ${amb})`);
   const { parse: parseSched } = await import('../../backend/src/services/ingest/construction_schedule.js');
-  const BTE = process.env.BTE_DATA_DIR || '/mnt/c/Users/vutun/Downloads/2020.03.11 MEP-BTE-PCR/2020.01.11 MEP-BTE-PCR';
-  const p = await parseSched(`${BTE}/SƠ ĐỒ CÂY/Tiến độ hạng mục.xlsx`, 1, null);
-  ok(p.sheets.length === 0, `ambiguous file parses to 0 sheets (got ${p.sheets.length})`);
+  const BTE = process.env.BTE_DATA_DIR || '';
+  if (BTE) {
+    const { existsSync } = await import('node:fs');
+    if (existsSync(`${BTE}/SƠ ĐỒ CÂY/Tiến độ hạng mục.xlsx`)) {
+      const p = await parseSched(`${BTE}/SƠ ĐỒ CÂY/Tiến độ hạng mục.xlsx`, 1, null);
+      ok(p.sheets.length === 0, `ambiguous file parses to 0 sheets (got ${p.sheets.length})`);
+    } else {
+      console.log('SKIP — ambiguous BTE source absent');
+    }
+  } else {
+    console.log('SKIP — BTE_DATA_DIR not set');
+  }
 }
 
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3107';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3107' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 try {
   const loginAs = async (email) => fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: 'admin123' }) }).then(r => r.json()).then(j => j.token);
   const siteT = await loginAs('site@hbg.com');

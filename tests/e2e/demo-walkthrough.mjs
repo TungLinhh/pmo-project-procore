@@ -4,10 +4,14 @@
 import { chromium } from 'playwright';
 import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { apiBase } from '../tools/env.mjs';
 
 const BASE = apiBase();
-const BTE = process.env.BTE_DATA_DIR || '/mnt/c/Users/vutun/Downloads/2020.03.11 MEP-BTE-PCR/2020.01.11 MEP-BTE-PCR';
+const root = fileURLToPath(new URL('../..', import.meta.url));
+const BTE = process.env.BTE_DATA_DIR || join(root, 'reference_sheets/2019.04.28 HBG-HBC-BCTT');
+const PSQL_BIN = process.env.PSQL_BIN || 'psql';
 const results = [];
 const ok = (cond, msg, extra = '') => { results.push({ cond, msg }); console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}${extra ? ' ' + extra : ''}`); };
 
@@ -17,8 +21,8 @@ execSync(`python3 << 'PYEOF'
 import zipfile
 D = ${JSON.stringify(BTE)}
 z = zipfile.ZipFile('/tmp/demo-walk.zip', 'w', zipfile.ZIP_DEFLATED)
-z.write(D + '/TIẾN ĐỘ SHOP/MEP-BTE-SHD-KID.xlsx', 'PK/TIẾN ĐỘ SHOP/MEP-BTE-SHD-KID.xlsx')
-z.write(D + '/TIẾN ĐỘ THI CÔNG/MEP-BTE-CSP-KID.xlsx', 'PK/TIẾN ĐỘ THI CÔNG/MEP-BTE-CSP-KID.xlsx')
+z.write(D + '/TIẾN ĐỘ SHOP/Shop KID.xlsx', 'PK/TIẾN ĐỘ SHOP/Shop KID.xlsx')
+z.write(D + '/TIẾN ĐỘ THI CÔNG/TĐ KID.xlsx', 'PK/TIẾN ĐỘ THI CÔNG/TĐ KID.xlsx')
 z.close()
 print('demo zip ready')
 PYEOF`);
@@ -27,7 +31,7 @@ const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
 // reset walkthrough fixtures so every run replays the full flow
 try {
-  execSync(`PGPASSWORD=pmo_dev_pwd /home/linuxbrew/.linuxbrew/bin/psql -h 127.0.0.1 -p 5433 -U pmo_user -d pmo -t -A -c "UPDATE file_uploads SET status='STAGED', project_id=NULL, zone_id=NULL, skip_reason=NULL WHERE relative_path LIKE 'PK/%';"`);
+  execSync(`${PSQL_BIN} -h ${process.env.PGHOST || '127.0.0.1'} -p ${process.env.PGPORT || '5433'} -U ${process.env.PGUSER || 'pmo_user'} -d ${process.env.PGDATABASE || 'pmo'} -t -A -c "UPDATE file_uploads SET status='STAGED', project_id=NULL, zone_id=NULL, skip_reason=NULL WHERE relative_path LIKE 'PK/%';"`, { env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'pmo_dev_pwd' } });
 } catch { /* DB may be unreachable in pure-frontend runs */ }
 const consoleErrors = [];
 const pageErrors = [];
@@ -65,10 +69,13 @@ try {
   // 3. review queue: classify + confirm + commit one file via UI
   await page.goto(BASE + '/hq/uploads', { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForTimeout(1500);
-  await page.click('text=Classify staged');
+  // Bám `data-testid`, không bám nhãn hiển thị: nhãn được dịch VI/EN nên bám nhãn là
+  // bài kiểm đỏ mỗi lần dịch (đo 2026-09-28: `text=Classify staged` hết tồn tại sau
+  // khi nhãn sang tiếng Việt, bài dừng ở bước 3/3 với `page.click` timeout 30s).
+  await page.click('[data-testid="classify-staged"]');
   await page.waitForTimeout(8000);
   // classified rows leave the default Needs-review filter — view All to see guesses
-  await page.selectOption('select', 'all');
+  await page.selectOption('[data-testid="review-filter"]', 'all');
   await page.waitForTimeout(1500);
   let reviewText = await page.content();
   ok(/shop_drawing|construction_schedule/i.test(reviewText), 'classify guesses visible in review queue');
@@ -76,7 +83,7 @@ try {
   // confirm first Confirm button if present (classified rows live under All)
   await page.selectOption('select', 'all').catch(() => {});
   await page.waitForTimeout(1500);
-  const confirmBtn = page.locator('button', { hasText: 'Confirm' }).first();
+  const confirmBtn = page.locator('[data-testid="confirm-upload"]').first();
   if (await confirmBtn.count()) {
     await confirmBtn.click();
     await page.waitForTimeout(1000);
@@ -88,8 +95,10 @@ try {
         Array.from(sel.options).find(o => o.text.includes('BTE-WP4-HBC'))?.value || '');
       if (bteValue) await projSelect.first().selectOption(bteValue);
       else await projSelect.first().selectOption({ index: 1 });
-      await page.fill('input[placeholder="doc_type"]', 'shop_drawing');
-      await page.click('text=Configure →');
+      // Ô này thuộc form confirm của **ReviewQueue** (không phải UploadWizard), và
+      // vẫn là ô tự do — dùng `testid` để không bám nhãn.
+      await page.fill('[data-testid="confirm-doc-type"]', 'shop_drawing');
+      await page.click('[data-testid="confirm-configure"]');
       await page.waitForTimeout(10000);
       const toastText = await page.content();
       const toastMatch = toastText.match(/(Thiếu|Lỗi|Configure lỗi|failed|error)[^<]{0,120}/i);
@@ -145,7 +154,11 @@ try {
   // + progress row opens the extracted-data drill-down (not a fake issue)
   await page.goto(BASE + '/hq/progress?project=1', { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForTimeout(4000);
-  await page.locator('tbody tr').first().click();
+  // Bảng **thứ hai** mới là bảng tiến độ (bảng đầu là nhật ký thao tác, dòng của nó
+  // `cursor:auto` và không có `onClick`). `tbody tr` không phân biệt được hai bảng nên
+  // bản cũ bấm nhầm dòng nhật ký ⇒ modal không mở, và bài báo đỏ như thể tính năng
+  // hỏng. Đo 2026-09-28: bấm đúng bảng thứ hai thì modal mở, `box.y = 48`.
+  await page.locator('table').nth(1).locator('tbody tr').first().click();
   try {
     await page.waitForSelector('.modal-backdrop', { timeout: 8000, state: 'visible' });
     const box = await page.locator('.modal-backdrop .modal').boundingBox();

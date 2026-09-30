@@ -25,3 +25,10 @@ export const refreshLimiter = rateLimit({
   message: viMessage,
   ...BASE_OPTS,
 });
+
+export const aiLimiter = rateLimit({
+  windowMs: 60_000,
+  max: Number(process.env.AI_RATE_MAX) || 30,
+  message: { error: 'Quá nhiều yêu cầu AI, vui lòng đợi một phút rồi thử lại' },
+  ...BASE_OPTS,
+});

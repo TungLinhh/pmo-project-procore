@@ -25,6 +25,7 @@ import { getDb } from './index.js';
 
 export async function auditLog(opts) {
   const {
+    tenantId = null,
     userId = null,
     userName = null,
     userRole = null,
@@ -39,6 +40,10 @@ export async function auditLog(opts) {
   } = opts;
 
   if (!action) throw new Error('auditLog: action is required');
+  // Never default to tenant 1: an audit row in the wrong tenant is invisible
+  // to that tenant's reviewers and breaks the RLS scoping of the audit screen.
+  const tenant = tenantId ?? context?.tenant_id ?? null;
+  if (tenant == null) throw new Error('auditLog: tenantId is required');
 
   const db = getDb();
   // Auto-stringify JSON columns for PG
@@ -53,12 +58,12 @@ export async function auditLog(opts) {
       resource_type, resource_id,
       before, after, context, field_changes, note
     ) VALUES (
-      1, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?,
       ?, ?,
       ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, ?
     )
   `).runAsync(
-    userId, userName, userRole, action,
+    tenant, userId, userName, userRole, action,
     resourceType, resourceId,
     bef, aft, ctx, fc, note
   );

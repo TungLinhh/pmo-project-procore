@@ -4,6 +4,7 @@
 // 3. tampered ledger checksum → init exits non-zero (drift detected).
 // 4. pre-ledger adoption: schema exists + empty ledger → adopt without re-run.
 // Run: node tests/e2e/p3-ledger.mjs
+import { adminPsql } from '../tools/env.mjs';
 import { execSync } from 'node:child_process';
 
 let failures = 0;
@@ -18,13 +19,12 @@ const DBNAME = 'pmo_ledgertest';
 const FRESH_URL = `postgresql://${PG.user}:${PG.password}@${PG.host}:${PG.port}/${DBNAME}`;
 const PSQL = `PGPASSWORD=${PG.password} psql -h ${PG.host} -p ${PG.port} -U ${PG.user}`;
 const psqlDb = (db, sql) => execSync(`${PSQL} -d ${db} -t -A -c "${sql.replace(/"/g, '\\"')}"`, { encoding: 'utf8' }).trim();
-const SUPERPSQL = `psql -h /tmp -p ${PG.port} -U vutun`;
 const superpsql = (sql) => execSync(`${SUPERPSQL} -d postgres -c "${sql}"`, { encoding: 'utf8' });
 const runInit = (extra = {}) =>
   execSync('node backend/src/db/init.js', { encoding: 'utf8', env: { ...process.env, DATABASE_URL: FRESH_URL, ...extra }, timeout: 180000 });
 
-superpsql(`DROP DATABASE IF EXISTS ${DBNAME};`);
-superpsql(`CREATE DATABASE ${DBNAME} OWNER ${PG.user};`);
+adminPsql(`DROP DATABASE IF EXISTS ${DBNAME};`);
+adminPsql(`CREATE DATABASE ${DBNAME} OWNER ${PG.user};`);
 
 // 1. first run records every file
 try {
@@ -59,7 +59,7 @@ if (!failures) {
   ok(psqlDb(DBNAME, 'SELECT COUNT(*) FROM schema_migrations;') === String(fileCount), 'ledger refilled by adoption');
 }
 
-superpsql(`DROP DATABASE IF EXISTS ${DBNAME};`);
+adminPsql(`DROP DATABASE IF EXISTS ${DBNAME};`);
 ok(true, 'scratch database dropped');
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');

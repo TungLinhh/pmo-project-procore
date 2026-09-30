@@ -41,3 +41,21 @@ export function checkTransition(resource, from, to) {
   }
   return { ok: true };
 }
+
+// Tail workflows run after the core approval/payment state and therefore have
+// their own fields instead of overloading workflow_status.
+export const LIFECYCLE_TRANSITIONS = {
+  shop_as_built: { PENDING: ['RECORDED'], RECORDED: [] },
+  retention: { PENDING: ['PENDING', 'RELEASED'], RELEASED: [] },
+  physical_sample: {
+    PENDING: ['ACCEPTED', 'REJECTED'],
+    ACCEPTED: ['PENDING', 'REJECTED'],
+    REJECTED: ['PENDING', 'ACCEPTED'],
+  },
+};
+
+export function checkLifecycle(resource, from, to) {
+  const allowed = LIFECYCLE_TRANSITIONS[resource]?.[from] || [];
+  if (!allowed.includes(to)) return { ok: false, error: `Invalid lifecycle transition: ${from} → ${to} (${resource})` };
+  return { ok: true };
+}

@@ -4,11 +4,13 @@
 // loop proves itself. Mount: /api/erp.
 import { Router } from 'express';
 import multer from 'multer';
+import { decodeUploadNames } from '../lib/upload-names.js';
 import { requireAuth, requireRole } from '../lib/auth.js';
 import { permissionMiddleware } from '../lib/permission-middleware.js';
 import { requireFeature } from '../lib/entitlements.js';
 import { getDb } from '../db/index.js';
 import { withAudit } from '../lib/with-audit.js';
+import { errorBody } from '../lib/error-body.js';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -46,7 +48,7 @@ router.post('/profiles', async (req, res) => {
   }
   try {
     const row = await withAudit(req, {
-      action: 'CREATE', resourceType: 'erp_profile', resourceId: 0,
+      action: 'CREATE', resourceType: 'erp_profile',
       after: { name, connector, sftp_host, sftp_port, sftp_user, secret_env, remote_path, config },
       note: `ERP profile ${name} [${connector}] (secret in ${secret_env})`,
     }, async (client) => {
@@ -62,7 +64,7 @@ router.post('/profiles', async (req, res) => {
     });
     res.status(201).json(row);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 
@@ -77,7 +79,7 @@ router.post('/webhooks/test', async (req, res) => {
     const { deliverWebhook } = await import('../lib/erp-webhook.js');
     res.json(await deliverWebhook({ tenantId: req.user.tenant_id, profile: p, event: { type: 'ping', data: { profile: p.name } } }));
   } catch (e) {
-    res.status(e.status || 500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 
@@ -95,7 +97,7 @@ router.delete('/profiles/:id', async (req, res) => {
     });
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 
@@ -109,39 +111,88 @@ router.get('/push-log', async (req, res) => {
 });
 
 // --- vendor import: parse CSV (memory, ≤5MB) → trigram suggestions, no writes.
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const upload = decodeUploadNames(multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }));
 
-function parseVendorCsv(text) {
-  const lines = String(text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  if (!lines.length) return { headers: [], rows: [] };
-  const split = (l) => l.split(',').map((c) => c.trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
-  const headers = split(lines[0]).map((h) => h.toLowerCase());
-  const rows = lines.slice(1, 501).map(split).filter((c) => c.some(Boolean));
-  return { headers, rows };
+export function parseVendorCsv(text, maxRows = 200) {
+  const src = String(text || '');
+  const matrix = [];
+  let row = [];
+  let field = '';
+  let quoted = false;
+  const pushField = () => { row.push(field); field = ''; };
+  const pushRow = () => {
+    pushField();
+    if (row.some((value) => value.trim() !== '')) matrix.push(row);
+    row = [];
+  };
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (quoted) {
+      if (ch === '"' && src[i + 1] === '"') { field += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else field += ch;
+    } else if (ch === '"' && field.length === 0) quoted = true;
+    else if (ch === ',') pushField();
+    else if (ch === '\n') pushRow();
+    else if (ch !== '\r') field += ch;
+  }
+  if (field.length || row.length) pushRow();
+  if (!matrix.length) return { headers: [], rows: [], truncated: false };
+  const headers = matrix[0].map((h) => h.trim().toLowerCase());
+  const allRows = matrix.slice(1);
+  return { headers, rows: allRows.slice(0, maxRows), truncated: allRows.length > maxRows };
+}
+
+async function bestVendorMatches(db, tenantId, inputNames) {
+  const names = [...new Set(inputNames.map((name) => String(name || '').trim()).filter(Boolean))].slice(0, 200);
+  if (!names.length) return new Map();
+  const rows = await db.prepare(
+    `WITH input AS (
+       SELECT name, ordinality::int AS input_order
+       FROM unnest(?::text[]) WITH ORDINALITY AS u(name, ordinality)
+     )
+     SELECT input.name AS input_name, v.id AS vendor_id, v.name AS vendor_name,
+            v.tax_id AS current_tax_id, similarity(input.name, v.name)::float AS similarity
+     FROM input
+     CROSS JOIN LATERAL (
+       SELECT id, name, tax_id
+       FROM (
+         SELECT id, name, tax_id
+         FROM vendors
+         WHERE tenant_id = ?
+         ORDER BY id
+         LIMIT 2000
+       ) candidates
+       ORDER BY similarity(candidates.name, input.name) DESC, candidates.id
+       LIMIT 1
+     ) v`
+  ).allAsync(names, tenantId);
+  return new Map(rows.map((r) => [r.input_name, {
+    vendor_id: r.vendor_id,
+    vendor_name: r.vendor_name,
+    current_tax_id: r.current_tax_id,
+    similarity: Number(Number(r.similarity).toFixed(3)),
+  }]));
 }
 
 // POST /api/erp/vendors/import (multipart `file`) — suggest-only matching.
 router.post('/vendors/import', requireFeature('erp-export'), requireRole('admin', 'ceo', 'procurement', 'accounting'), upload.single('file'), async (req, res) => {
   const db = getDb();
   if (!req.file) return res.status(400).json({ error: 'No file (field: file)' });
-  const { headers, rows } = parseVendorCsv(req.file.buffer.toString('utf8'));
+  const { headers, rows, truncated } = parseVendorCsv(req.file.buffer.toString('utf8'));
   const nameIdx = headers.findIndex((h) => ['name', 'ten', 'vendor', 'ncc'].includes(h));
   const taxIdx = headers.findIndex((h) => ['tax_id', 'taxid', 'mst', 'tax'].includes(h));
   if (nameIdx < 0) return res.status(400).json({ error: 'CSV needs a name/ten column' });
-  const vendors = await db.prepare('SELECT id, name, tax_id FROM vendors WHERE tenant_id = ?').allAsync(req.user.tenant_id);
-  const suggestions = [];
-  for (const cols of rows) {
+  const names = rows.map((cols) => (cols[nameIdx] || '').trim()).filter(Boolean);
+  const matches = await bestVendorMatches(db, req.user.tenant_id, names);
+  const suggestions = rows.map((cols) => {
     const name = (cols[nameIdx] || '').trim();
-    if (!name) continue;
+    if (!name) return null;
     const tax = taxIdx >= 0 ? (cols[taxIdx] || '').trim() : '';
-    let best = null;
-    for (const v of vendors) {
-      const sim = await db.prepare('SELECT similarity(?, ?) AS s').getAsync(name, v.name);
-      if (!best || sim.s > best.similarity) best = { vendor_id: v.id, vendor_name: v.name, current_tax_id: v.tax_id, similarity: Number(sim.s.toFixed(3)) };
-    }
-    suggestions.push({ name, tax_id: tax, match: best && best.similarity >= 0.4 ? best : null });
-  }
-  res.json({ rows: rows.length, suggestions: suggestions.slice(0, 200) });
+    const best = matches.get(name) || null;
+    return { name, tax_id: tax, match: best && best.similarity >= 0.4 ? best : null };
+  }).filter(Boolean);
+  res.json({ rows: rows.length, truncated, suggestions });
 });
 
 // POST /api/erp/vendors/confirm {vendor_id, tax_id} — the ONLY write path.
@@ -165,7 +216,7 @@ router.post('/vendors/confirm', requireFeature('erp-export'), requireRole('admin
     });
     res.json(row);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 
@@ -180,20 +231,16 @@ router.get('/fast/vendors', requireRole('admin', 'ceo', 'procurement', 'accounti
     const profile = await db.prepare('SELECT * FROM erp_profiles WHERE id = ? AND tenant_id = ?').getAsync(pid, req.user.tenant_id);
     if (!profile) return res.status(404).json({ error: 'Not found' });
     const vendors = await pullFastVendors({ tenantId: req.user.tenant_id, profileId: pid });
-    // Attach local matches (same trigram rule as CSV import).
-    const local = await db.prepare('SELECT id, name, tax_id FROM vendors WHERE tenant_id = ?').allAsync(req.user.tenant_id);
-    const out = [];
-    for (const v of vendors) {
-      let best = null;
-      for (const l of local) {
-        const sim = await db.prepare('SELECT similarity(?, ?) AS s').getAsync(v.name, l.name);
-        if (!best || sim.s > best.similarity) best = { vendor_id: l.id, vendor_name: l.name, current_tax_id: l.tax_id, similarity: Number(sim.s.toFixed(3)) };
-      }
-      out.push({ ...v, match: best && best.similarity >= 0.4 ? best : null });
-    }
-    res.json({ count: out.length, vendors: out.slice(0, 200) });
+    // Attach local matches with the same bounded trigram query as CSV import.
+    const bounded = vendors.slice(0, 200);
+    const matches = await bestVendorMatches(db, req.user.tenant_id, bounded.map((v) => v.name));
+    const out = bounded.map((v) => {
+      const best = matches.get(v.name) || null;
+      return { ...v, match: best && best.similarity >= 0.4 ? best : null };
+    });
+    res.json({ count: out.length, truncated: vendors.length > out.length, vendors: out });
   } catch (e) {
-    res.status(e.status || 500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 

@@ -3,13 +3,16 @@
 // Writes: admin/ceo only. Reads: any authenticated member.
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../lib/auth.js';
+import { permissionMiddleware } from '../lib/permission-middleware.js';
 import { getDb } from '../db/index.js';
 import { withAudit } from '../lib/with-audit.js';
 import { validateLevels, CHAINABLE_RESOURCES } from '../lib/approval.js';
 import { requireFeature } from '../lib/entitlements.js';
+import { errorBody } from '../lib/error-body.js';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
+router.use(permissionMiddleware);
 
 router.get('/', async (req, res) => {
   const db = getDb();
@@ -39,7 +42,7 @@ router.post('/', requireRole('admin', 'ceo'), requireFeature('chains'), async (r
   }
   try {
     const result = await withAudit(req, {
-      action: 'CONFIG', resourceType: 'approval_chain', resourceId: 0,
+      action: 'CONFIG', resourceType: 'approval_chain',
       context: { department_id, resource_type },
       after: { department_id, resource_type, levels },
       note: `Cấu hình chain ${resource_type} (${department_id ? 'dept #' + department_id : 'default'})`,
@@ -65,7 +68,7 @@ router.post('/', requireRole('admin', 'ceo'), requireFeature('chains'), async (r
     });
     res.json(result);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 
@@ -86,7 +89,7 @@ router.delete('/:id', requireRole('admin', 'ceo'), requireFeature('chains'), asy
     });
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json(errorBody(e));
   }
 });
 

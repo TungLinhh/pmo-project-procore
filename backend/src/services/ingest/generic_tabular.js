@@ -1,7 +1,7 @@
 // Generic ingestor for tabular files. PG-only. Mô hình A wizard.
 import { getDb } from '../../db/index.js';
 import { recordFailure } from './failures.js';
-import { readSheet, toText, toInt, findDataStart } from '../../lib/excel.js';
+import { readSheet, readWorkbook, toText, toInt, findDataStart } from '../../lib/excel.js';
 
 const COL_COUNT = 10;
 const HEADER_KEYWORDS = ['stt', 'tt', 'no', 'no.'];
@@ -15,8 +15,7 @@ function parseRow(row, colCount) {
 }
 
 export async function parse(filePath, projectId, options = {}) {
-  const XLSX = (await import('xlsx')).default;
-  const wb = XLSX.readFile(filePath, { cellDates: true });
+  const wb = readWorkbook(filePath);
   const docType = options.docType || 'generic';
   const sheets = [];
   for (const sheetName of wb.SheetNames) {
@@ -40,7 +39,10 @@ export async function commit(parsed, projectId, options = {}) {
   for (const sheet of parsed.sheets) {
     for (const [idx, row] of sheet.rows.entries()) {
       try {
-        const rowData = { project_id: projectId, doc_type: docType, source_sheet: sheet.sheet, ordinal: row.ordinal };
+        const rowData = {
+          project_id: projectId, doc_type: docType, source_sheet: sheet.sheet, ordinal: row.ordinal,
+          upload_id: options.uploadId ?? null,
+        };
         for (let c = 0; c < COL_COUNT; c++) rowData[`col_${c + 1}`] = row[`col_${c + 1}`];
         await db.upsert('generic_sheets',
           { conflictCols: ['project_id', 'doc_type', 'source_sheet', 'ordinal'] },

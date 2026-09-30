@@ -80,3 +80,7 @@ reference_sheets/
 
 # ===== Misc =====
 .openclaw/
+
+# Bí mật + log của bản triển khai một máy (sinh bởi deploy/single-machine/install.sh).
+deploy/single-machine/pmo.env
+deploy/single-machine/logs/

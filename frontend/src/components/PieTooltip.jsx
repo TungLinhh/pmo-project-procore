@@ -21,7 +21,6 @@ export default function PieTooltip({ data }) {
   const active = data[activeIdx] || data[0];
   if (!active) return null;
   const total = data.reduce((s, d) => s + d.value, 0) || 1;
-  const totalPct = Math.round(active.value / total * 100);
 
   return (
     <div

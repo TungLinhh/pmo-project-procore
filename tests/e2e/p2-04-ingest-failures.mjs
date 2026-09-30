@@ -1,5 +1,9 @@
 // P2-04: ingest failures are structured {sheet,row,field,message,ref} — real bad rows, real PG.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p2-04-ingest-failures.mjs
+import { cleanupProjectsOnExit } from './lib-cleanup.mjs';
+
+// Dọn dự án thử nghiệm nếu bài dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupProjectsOnExit(['BAD-%', 'OK-%'], { label: 'p2-04-ingest-failures' });
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const { commit: commitProjectLevel } = await import('../../backend/src/services/ingest/project_level.js');
 const { commit: commitDaily } = await import('../../backend/src/services/ingest/daily_report.js');

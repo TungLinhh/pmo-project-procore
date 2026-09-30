@@ -1,7 +1,8 @@
 // Vòng 7 full verify: mobile 20 screens + dashboard data + detail nav + approval UX
 import { chromium } from 'playwright';
-const BASE = 'http://localhost:3000';
-const SHOTS = '/home/vutun/pmo_project/docs/bug_screenshots';
+import path from 'node:path';
+const BASE = process.env.BASE_URL || 'http://localhost:3000';
+const SHOTS = path.resolve('docs/bug_screenshots');
 const browser = await chromium.launch({ headless: true });
 
 // ====== 1. Mobile portrait 20 screens @ 375x812 ======

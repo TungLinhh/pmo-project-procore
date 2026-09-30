@@ -40,7 +40,7 @@ async function callFast({ baseUrl, appId, secret, path, method = 'GET', body = n
   throw lastErr;
 }
 
-export async function pushFastPRs({ tenantId, profileId, sender = null }) {
+export async function pushFastPRs({ tenantId, profileId, projectId = null, sender = null }) {
   const db = getDb();
   const profile = await db.prepare('SELECT * FROM erp_profiles WHERE id = ? AND tenant_id = ?').getAsync(profileId, tenantId);
   if (!profile) throw Object.assign(new Error('ERP profile not found'), { status: 404 });
@@ -49,14 +49,17 @@ export async function pushFastPRs({ tenantId, profileId, sender = null }) {
   if (!secret) throw Object.assign(new Error(`FAST secret missing: set ${profile.secret_env} in env`), { status: 503 });
   const cfg = cfgOf(profile);
   if (!cfg.baseUrl) throw Object.assign(new Error('fast profile needs config.base_url'), { status: 422 });
+  // projectId is not optional decoration: without it this pushed every
+  // APPROVED/PAID request in the tenant, so an ACCOUNTING user assigned to one
+  // project could ship the whole tenant's AP ledger to the remote system.
   const rows = await db.prepare(
     `SELECT pr.id, pr.request_no, pr.amount, pr.status, pr.due_date, i.invoice_no, c.contract_no, p.code AS project_code
      FROM payment_requests pr
      JOIN invoices i ON i.id = pr.invoice_id
      JOIN contracts c ON c.id = i.contract_id
      JOIN projects p ON p.id = c.project_id
-     WHERE p.tenant_id = ? AND pr.status IN ('APPROVED', 'PAID') ORDER BY pr.id DESC LIMIT 500`
-  ).allAsync(tenantId);
+     WHERE p.tenant_id = ? ${projectId ? 'AND p.id = ?' : ''} AND pr.status IN ('APPROVED', 'PAID') ORDER BY pr.id DESC LIMIT 500`
+  ).allAsync(...(projectId ? [tenantId, projectId] : [tenantId]));
   const payload = { project_count: rows.length, payment_requests: rows };
   const post = sender || (async (args) => callFast({ ...args, method: 'POST', body: payload }));
   const r = await post({ baseUrl: cfg.baseUrl, appId: cfg.appId, secret, path: cfg.paths.push_prs });

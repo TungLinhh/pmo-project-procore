@@ -2,14 +2,23 @@
 // resolution, child override wins, cycle 422, cross-tenant parent 404.
 // Scratch HBG departments, fully cleaned in finally.
 // Run: node tests/e2e/nested-departments.mjs (spawns its own server, needs dev DB)
+import { waitForServer } from './lib.mjs';
+import { cleanupRowsOnExit } from './lib-cleanup.mjs';
 import { spawn } from 'node:child_process';
 
+
+// Bài này tạo PARENT/CHILD và **không** dọn: chạy 2 lần là 4 cặp dòng, và
+// `p5-golden.mjs` kiểm đúng số bộ phận của tenant hbg nên đỏ theo.
+cleanupRowsOnExit([
+  ['departments', "code LIKE 'PARENT-%'"],
+  ['departments', "code LIKE 'CHILD-%'"],
+], { label: 'nested-departments' });
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3120';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3120' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 
 const stamp = Date.now();
 const created = { depts: [], chains: [] };
@@ -28,11 +37,12 @@ try {
     return r;
   };
 
-  // 1. Parent + child creation.
+  // 1. Parent + child creation. Tạo mới trả **201** (`routes/master-data.js:174`)
+  // — bản cũ kỳ vọng 200 nên đỏ 2 khẳng định mà không báo lý do.
   const par = await mk('PARENT');
-  ok(par.s === 200, `parent created (got ${par.s})`);
+  ok(par.s === 201, `parent created (got ${par.s})`);
   const chi = await mk('CHILD', par.j.id);
-  ok(chi.s === 200, `child with parent (got ${chi.s})`);
+  ok(chi.s === 201, `child with parent (got ${chi.s})`);
   // 2. Cross-tenant parent → 404 (pilot KT department).
   const pilotDept = await db.prepare(`SELECT id FROM departments WHERE tenant_id = (SELECT id FROM tenants WHERE code = 'PILOT') ORDER BY id LIMIT 1`).getAsync();
   const x = await mk('XEN', pilotDept.id);

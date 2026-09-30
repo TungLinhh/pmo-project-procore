@@ -2,6 +2,10 @@
 // Direct commit() calls (p2-04 pattern) on dev DB with unique names + cleanup.
 // If any of these 400/500 on a valid row, the wizard commit for that doc type
 // is broken (the daily-wizard crash class). Run: node tests/e2e/ingest-happy.mjs
+import { cleanupProjectsOnExit } from './lib-cleanup.mjs';
+
+// Dọn dự án thử nghiệm nếu bài dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupProjectsOnExit(['HAPPY%'], { label: 'ingest-happy' });
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const { commit: commitSub } = await import('../../backend/src/services/ingest/subcontractor_directory.js');
 const { commit: commitRes } = await import('../../backend/src/services/ingest/resource_directory.js');

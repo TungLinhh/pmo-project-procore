@@ -3,10 +3,14 @@
 // Mount: /api/export. Enterprise flag.
 
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { requireAuth } from '../lib/auth.js';
 import { permissionMiddleware } from '../lib/permission-middleware.js';
 import { requireFeature } from '../lib/entitlements.js';
 import { getDb } from '../db/index.js';
+import { withAudit } from '../lib/with-audit.js';
+import { need } from '../lib/optional-dep.js';
+import { errorBody } from '../lib/error-body.js';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -58,6 +62,61 @@ router.get('/ap-ledger.csv', requireFeature('erp-export'), async (req, res) => {
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="ap-ledger-${pid}-${Date.now()}.csv"`);
   res.send('\ufeff' + lines.join('\n')); // BOM for Excel VN
+});
+
+const reportLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: 'draft-7', legacyHeaders: false });
+
+// Browser-printable bilingual report. `print=1` opens the browser print dialog;
+// users can choose "Save as PDF" without a heavyweight server-side renderer.
+router.get('/project-report.html', reportLimiter, async (req, res) => {
+  const pid = Number(req.query.project_id);
+  if (!Number.isInteger(pid)) return res.status(400).json({ error: 'project_id required' });
+  const lang = req.query.lang === 'en' ? 'en' : 'vi';
+  const { checkProjectAccess } = await import('../lib/project-access.js');
+  if (!(await checkProjectAccess(req.user, pid))) return res.status(404).json({ error: 'Not found' });
+  try {
+    const { buildProjectPrintHtml } = await import('../lib/project-report-html.js');
+    const html = await buildProjectPrintHtml(pid, lang, req.query.print === '1');
+    if (!html) return res.status(404).json({ error: 'Not found' });
+    await withAudit(req, {
+      action: 'EXPORT', resourceType: 'project_report', resourceId: pid,
+      context: { project_id: pid, format: 'print_html', lang },
+      after: { format: 'print_html', lang }, note: `Xuất báo cáo in project ${pid} (${lang})`,
+    }, null);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.send(html);
+  } catch (e) {
+    res.status(e.status || 500).json(errorBody(e));
+  }
+});
+
+// GET /api/export/project-report.xlsx?project_id= — workbook 6 sheets FR-1.9.
+// GĐ1 cho mọi plan (không gắn flag Enterprise): RBAC schedule-read + project
+// access. Xuất dữ liệu nhạy cảm được audit và rate-limit ở route.
+router.get('/project-report.xlsx', reportLimiter, async (req, res) => {
+  const pid = Number(req.query.project_id);
+  if (!Number.isInteger(pid)) return res.status(400).json({ error: 'project_id required' });
+  const { checkProjectAccess } = await import('../lib/project-access.js');
+  if (!(await checkProjectAccess(req.user, pid))) return res.status(404).json({ error: 'Not found' });
+  try {
+    const { buildProjectReport } = await import('../lib/project-report.js');
+    const XLSX = await need('xlsx');
+    const built = await buildProjectReport(pid);
+    if (!built) return res.status(404).json({ error: 'Not found' });
+    const buf = XLSX.write(built.wb, { type: 'buffer', bookType: 'xlsx' });
+    await withAudit(req, {
+      action: 'EXPORT', resourceType: 'project_report', resourceId: pid,
+      context: { project_id: pid, format: 'xlsx' }, after: { format: 'xlsx', bytes: buf.length },
+      note: `Xuất Excel project ${pid}`,
+    }, null);
+    const safe = String(built.code || pid).replace(/[^A-Za-z0-9-_]/g, '_');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="bao-cao-${safe}-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    res.send(buf);
+  } catch (e) {
+    res.status(e.status || 500).json(errorBody(e));
+  }
 });
 
 export default router;

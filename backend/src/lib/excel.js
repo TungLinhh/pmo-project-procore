@@ -2,7 +2,13 @@
 // P2-9: xlsx loads via needSync so a missing dep throws an actionable 503 at
 // first use instead of crashing backend boot (static import would fail load).
 import { needSync } from './optional-dep.js';
+import { readFileSync } from 'node:fs';
 const XLSX = needSync('xlsx');
+
+export function readWorkbook(filePath) {
+  const buffer = readFileSync(filePath);
+  return XLSX.read(buffer, { type: 'buffer', cellDates: true, cellNF: false, cellText: false });
+}
 
 export function isError(v) {
   if (v === null || v === undefined) return false;
@@ -88,7 +94,7 @@ export function renumber(items, key = 'ordinal') {
 }
 
 export function readSheet(filePath, sheetName) {
-  const wb = XLSX.readFile(filePath, { cellDates: true, cellNF: false, cellText: false });
+  const wb = readWorkbook(filePath);
   if (!wb.Sheets[sheetName]) {
     throw new Error(`Sheet "${sheetName}" not found in ${filePath}. Available: ${wb.SheetNames.join(', ')}`);
   }
@@ -146,56 +152,111 @@ export function listSheets(filePath) {
   return wb.SheetNames;
 }
 
+// Dạng chuẩn hoá tên file để khớp từ khoá.
+//
+// Vì sao cần bốn biến thể: chuẩn hoá cũ chỉ thay `_` bằng khoảng trắng, nên dấu gạch
+// nối — dấu phân cách phổ biến nhất trong tên file tiếng Việt ngoài đời — không được
+// xử lý, còn bảng từ khoá viết dạng có khoảng trắng. Đo 2026-09-28 trên 20 tên file
+// thật: `tien-do.xlsx`, `ban-ve-shop.xlsx`, `vat-tu-thang9.xlsx`,
+// `bao-cao-thanh-toan.xlsx` đều ra `unknown` trong khi thông điệp lỗi của chính
+// `POST /api/upload` bảo người dùng đặt tên theo đúng các từ khoá đó.
+export function normalizeFileName(filename) {
+  const lower = String(filename || '').toLowerCase();
+  // Mọi dấu phân cách thành khoảng trắng, gộp khoảng trắng về một.
+  const spaced = lower
+    .replace(/[_\-.,+()[\]{}#]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // `đ`/`Đ` là chữ riêng, KHÔNG tách theo NFD nên `normalize` không bỏ được —
+  // phải thay tay. Không có dòng này, mọi tên gõ nửa dấu (`tien độ`, `vật tu`
+  // bị gõ thiếu dấu ở chữ nào đó) không bao giờ khớp từ khoá bỏ dấu.
+  const strip = (v) => v.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
+  return {
+    // Như cũ: chỉ `_` → khoảng trắng. Giữ lại để các mẫu có dấu gạch nối
+    // (`bte-wm`, `wm-01`, `mcr-mm`, `shd-`) vẫn khớp đúng như trước.
+    f: lower.replace(/_/g, ' ').replace(/\s+/g, ' ').trim(),
+    // Tất cả dấu phân cách → khoảng trắng: `tien-do` → `tien do`.
+    g: spaced,
+    // Như `g` nhưng bỏ dấu: `vật tư` → `vat tu`.
+    t: strip(spaced),
+    // Bỏ cả khoảng trắng, giữ dấu: `TienDo` → `tiendo`.
+    u: lower.replace(/\s+/g, ''),
+  };
+}
+
 // Try to detect doc_type from filename
 // Order matters: more specific patterns first
-// Normalize whitespace and underscores before matching
 export function detectDocType(filename) {
-  // Replace underscores with spaces, collapse whitespace, strip diacritics for matching
-  const f = filename.toLowerCase().replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
-  const fNoDiacritics = f.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const { f, g, t, u } = normalizeFileName(filename);
+  const fNoDiacritics = t;
+  // Khớp mẫu trên **mọi** biến thể. Dùng cho từ khoá viết bằng chữ; mẫu có dấu
+  // gạch nối (`bte-wm`, `wm-01`, `shd-`) thì tra thẳng trên `f` như cũ.
+  const has = (...pats) => pats.some((pat) => f.includes(pat) || g.includes(pat) || t.includes(pat) || u.includes(pat));
 
   // AR (phải thu) BEFORE generic payment: these files have their own ingestor.
   // Matches norm() diacritic-stripped style via fNoDiacritics for safety.
-  if (fNoDiacritics.includes('bai tram') || f.includes('mpm') || f.includes('hstt') || f.includes('ipc') || f.includes('phải thu') || f.includes('phai thu') || f.includes('công nợ') || f.includes('cong no')) return 'payment_ar';
+  if (has('bai tram', 'mpm', 'hstt', 'ipc', 'phải thu', 'phai thu', 'công nợ', 'cong no')) return 'payment_ar';
 
   // Payment progress FIRST (before generic "tiến độ" match)
-  if (f.includes('thanh toán') || f.includes('thanh toan') || f.includes('payment') || f.includes('hstt')) return 'payment_progress';
+  if (has('thanh toán', 'thanh toan', 'payment', 'hstt')) return 'payment_progress';
 
   // Business process / subcontractor
-  if (f.includes('quy trình thực hiện') || f.includes('quy trinh thuc hien')) return 'business_process';
-  if (f.includes('thầu phụ') || f.includes('thau phu') || f.includes('tổ đội') || f.includes('to doi')) return 'subcontractor_directory';
+  if (has('quy trình thực hiện', 'quy trinh thuc hien')) return 'business_process';
+  if (has('thầu phụ', 'thau phu', 'tổ đội', 'to doi')) return 'subcontractor_directory';
 
   // Reference shapes BEFORE generic content matches (bulk folder classifier agrees:
   // SƠ ĐỒ CÂY is work_breakdown even though the name contains "tiến độ").
-  if (f.includes('sơ đồ cây') || fNoDiacritics.includes('so do cay')) return 'work_breakdown';
+  if (has('sơ đồ cây', 'so do cay')) return 'work_breakdown';
 
   // Shop / material / construction
-  if (f.includes('shop ') || f.startsWith('shop')) return 'shop_drawing';
+  // Trước luật `shop ` chung: `bte-mshop-01` hoá ra là `bte mshop 01` ở biến thể
+  // `g`, tức chứa `shop ` — nếu luật chung đứng trước thì file shop master ra
+  // `shop_drawing` (đã xảy ra ở đợt 15 khi thêm biến thể `g`).
+  if (has('bte-mshop', 'mshop')) return 'shop_master';
+  if (has('bte-wm', 'wm-01')) return 'work_management';
+
   // Doc-code infixes (bulk folder classifier resolves the same types from folders)
   if (/shd-/i.test(f)) return 'shop_drawing';
   if (/csp-/i.test(f)) return 'construction_schedule';
   if (/msa/i.test(f)) return 'material_supply';
+  // `shop` chỉ khớp khi đứng **đầu** tên (sau khi bỏ tiền tố mã dự án) — không khớp ở
+  // giữa/cuối. Bản cũ dùng `includes('shop ')`, và biến thể `g` biến `BTE-SHOP-01` thành
+  // `bte shop 01` nên `shop ` khớp, kéo theo **che mất** `csp-`/`shd-` đứng sau nó
+  // (`BTE-SHOP-CSP-01` ra `shop_drawing` thay vì `construction_schedule`).
+  if (/^shop/.test(u) || /shop(drawing|bangve)?\d/.test(u)) return 'shop_drawing';
+  // `<mã dự án>-SHOP…`: mã dự án BTE có tiền tố `SHOP` nên tên như
+  // `BTE-WP4-SHOP.xlsx` hay `BTE-SHOP-01.xlsx` ra `unknown` ở bản cũ. Khớp khi
+  // `shop` đứng sau một đoạn mã dự án (trước đó đã phải là `shd-`/`csp-`/`msa` thì
+  // không tới được đây — chúng đứng trước).
+  if (/^[a-z0-9]+-wp\d*\d?-.?shop/.test(f) || /^[a-z0-9]+-shop/.test(f)) return 'shop_drawing';
+  // `bản vẽ shop` / `ban-ve-shop`: `shop` ở **cuối** tên. Trước khi siết luật trên,
+  // dạng này ra `unknown` vì `includes('shop ')` cần khoảng trắng phía sau mà `shop`
+  // lại ở cuối tên. Bắt bằng dạng không dấu `ban ve … shop` / `banve … shop`.
+  // Bỏ **cả** khoảng trắng, nên `bản vẽ shop.xlsx` → `banveshopxlsx`; mẫu cũ giữ
+  // khoảng trắng nên không khớp (đo được: vẫn ra `unknown`).
+  if (/^banve.*shop/.test(t.replace(/\s+/g, '')) || /^banve.*shop/.test(u.replace(/\s+/g, ''))) return 'shop_drawing';
   // Material: match "vat tu" in either diacritic or non-diacritic form
-  if (f.includes('vật tư') || f.includes('vat tu') || fNoDiacritics.includes('vat tu')) return 'material_supply';
-  if (f.includes('tđ ') || f.includes('td ') || f.includes('tiến độ') || f.includes('tiendo') || fNoDiacritics.includes('tien do')) return 'construction_schedule';
+  if (has('vật tư', 'vat tu')) return 'material_supply';
+  if (has('tđ ', 'td ', 'tiến độ', 'tiendo', 'tien do', 'khoang cach', 'khoảng cách')) return 'construction_schedule';
 
   // Daily report
-  if (f.includes('báo cáo công việc') || f.includes('bao cao cong viec') || f.includes('daily')) return 'daily_report';
+
 
   // RFA / Material master
-  if (f.includes('mcr-mm') || f.includes('rfa') || f.includes('rfa-submission')) return 'rfa_log';
-  if (f.includes('mcr-mpm') || f.includes('mpm')) return 'manpower_master_plan';
+  if (has('mcr-mm', 'rfa', 'rfa-submission')) return 'rfa_log';
+  if (has('mcr-mpm', 'mpm')) return 'manpower_master_plan';
 
+  // `resource_directory` phải thử TRƯỚC lưới `báo cáo` chung: bản cũ để `báo cáo tài
+  // nguyên` khớp `daily_report` vì luật daily đứng trước.
+  if (has('nguồn lực', 'nguon luc', 'tài nguyên')) return 'resource_directory';
+  if (has('báo cáo công việc', 'bao cao cong viec', 'báo cáo ngày', 'bao cao ngay', 'bao cao', 'bao cáo', 'daily')) return 'daily_report';
   // Shop master / work management
-  if (f.includes('bte-mshop') || f.includes('mshop')) return 'shop_master';
-  if (f.includes('bte-wm') || f.includes('wm-01')) return 'work_management';
 
   // Other
-  if (f.includes('sơ đồ') && f.includes('khu vực')) return 'zone_map';
-  if (f.includes('sơ đồ cây') || f.includes('cây')) return 'work_breakdown';
-  if (f.includes('file start')) return 'file_index';
-  if (f.includes('nguồn lực') || f.includes('nguon luc') || f.includes('tài nguyên')) return 'resource_directory';
+  if (has('sơ đồ') && has('khu vực')) return 'zone_map';
+  if (has('sơ đồ cây', 'cây')) return 'work_breakdown';
+  if (has('file start')) return 'file_index';
   // DUYỆT KHÁC folder classifies bulk as rfa_log — single-file agrees (was other_approved dead-end).
-  if (f.includes('duyệt khác') || f.includes('duyet khac')) return 'rfa_log';
+  if (has('duyệt khác', 'duyet khac')) return 'rfa_log';
   return 'unknown';
 }

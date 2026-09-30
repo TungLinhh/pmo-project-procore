@@ -1,15 +1,22 @@
 // P1-6: generic_sheets readable — GET /api/uploads/:id/rows returns committed
 // generic rows; domain types answer 404 with a pointer. Real PG + server.
 // Run: DATABASE_URL=postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo node tests/e2e/p1-generic-rows.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { cleanupProjectsOnExit } from './lib-cleanup.mjs';
+
 const XLSX = (await import('xlsx')).default;
 
+
+// Dọn dự án thử nghiệm nếu bài dừng giữa chừng — xem `lib-cleanup.mjs`.
+cleanupProjectsOnExit(['P1-GEN-%'], { label: 'p1-generic-rows' });
 let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3107';
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3107' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) });
@@ -26,8 +33,7 @@ try {
     [1, 'Mục generic A', 'note a'],
     [2, 'Mục generic B', 'note b'],
   ]), 'Sheet1');
-  XLSX.writeFile(wb, FP);
-  const { readFileSync } = await import('node:fs');
+  writeFileSync(FP, XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
   const proj = await post('/api/projects', { code: `P1-GEN-${Date.now()}` });
   const fd = new FormData();
   fd.append('file', new Blob([readFileSync(FP)]), 'file start test.xlsx');

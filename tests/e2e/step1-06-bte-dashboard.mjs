@@ -3,15 +3,31 @@
 // API, then asserts dashboard/OTD/payment/shop surfaces reflect the data.
 // Needs the real BTE folder; skips cleanly when absent (CI).
 // Run: BTE_DATA_DIR=... DATABASE_URL=... node tests/e2e/step1-06-bte-dashboard.mjs
+import { waitForServer } from './lib.mjs';
 import { spawn, execSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
-const BTE = process.env.BTE_DATA_DIR || '/mnt/c/Users/vutun/Downloads/2020.03.11 MEP-BTE-PCR/2020.01.11 MEP-BTE-PCR';
+const SP = process.env.SP_FILE || '';
+// Dùng `bte-files.mjs` để dịch tên chuẩn ↔ tên gốc (xem file đó). Trước đây bài này
+// kiểm đúng một đường dẫn `MEP-BTE-SHD-BOH.xlsx` rồi `SKIP` im lặng — trong khi dữ
+// liệu thật nằm ngay trong `reference_sheets/` với tên `Shop BOH.xlsx`.
+const { btePath, bteRoot, bteFiles } = await import('./bte-files.mjs');
+const BTE = bteRoot();
 const SHOP_DIR = `${BTE}/TIẾN ĐỘ SHOP`;
 const CSP_DIR = `${BTE}/TIẾN ĐỘ THI CÔNG`;
 const MAT_DIR = `${BTE}/TIẾN ĐỘ CUNG ỨNG VẬT TƯ`;
-if (!existsSync(`${SHOP_DIR}/MEP-BTE-SHD-BOH.xlsx`)) {
-  console.log('SKIP — BTE_DATA_DIR not present');
+if (!existsSync(btePath('TIẾN ĐỘ SHOP', 'MEP-BTE-SHD-BOH.xlsx', { optional: true }) || '')) {
+  console.log(`SKIP — không có thư mục nguồn BTE tại ${BTE}`);
+  process.exit(0);
+}
+if (!existsSync(SP)) {
+  // Cùng lý do như `step1-05`: cần sổ S&P có **số thanh toán thật** để dashboard
+  // kiểm được mặt phải sinh ra. Thư mục vật tư trên máy này có cột nhưng ô rỗng.
+  console.log(`
+SKIP — BTE nguồn đã có, nhưng thiếu sổ S&P (supplier payment) của khách hàng.
+  Cần: TIẾN ĐỘ THANH TOÁN A_B/HBG-BTE-MSA-S&P-CTY-2020.03.28.xlsx
+  Đặt biến: SP_FILE=/duong/dan/... node tests/e2e/step1-06-bte-dashboard.mjs
+  Đã thấy trong ${SHOP_DIR}: ${bteFiles('TIẾN ĐỘ SHOP', /^MEP-BTE-SHD-.*\.xlsx$/i, /^Shop .*\.xlsx$/i).length} file shop`);
   process.exit(0);
 }
 
@@ -19,11 +35,11 @@ let failures = 0;
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} — ${msg}`); if (!cond) failures++; };
 const DB = process.env.DATABASE_URL || 'postgresql://pmo_user:pmo_dev_pwd@127.0.0.1:5433/pmo';
 const BASE = 'http://localhost:3217';
-const PSQL = `PGPASSWORD=pmo_dev_pwd /home/linuxbrew/.linuxbrew/bin/psql -h 127.0.0.1 -p 5433 -U pmo_user -d pmo -t -A`;
+const PSQL = `PGPASSWORD=${process.env.PGPASSWORD || 'pmo_dev_pwd'} ${process.env.PSQL_BIN || 'psql'} -h ${process.env.PGHOST || '127.0.0.1'} -p ${process.env.PGPORT || '5433'} -U ${process.env.PGUSER || 'pmo_user'} -d ${process.env.PGDATABASE || 'pmo'} -t -A`;
 const psql = (sql) => execSync(`${PSQL} -c "${sql}"`).toString().trim();
 
 const srv = spawn('node', ['backend/src/index.js'], { env: { ...process.env, DATABASE_URL: DB, PORT: '3217' }, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 3500));
+await waitForServer(BASE);
 const pid = { value: null };
 try {
   const login = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@hbg.com', password: 'admin123' }) });
@@ -74,7 +90,7 @@ try {
   // 3. MSA register + S&P money chain (48 substantive parents + counted empty stubs)
   const msa = await ingestFile(`${MAT_DIR}/MEP-BTE-MSA-01.xlsx`, 'material_supply', null);
   ok(msa.ok >= 40 && msa.errors === 0 && (msa.skipped_empty || 0) > 0, `MSA materials committed (ok=${msa.ok} skipped_empty=${msa.skipped_empty})`);
-  const sp = await ingestFile('/mnt/c/Users/vutun/Downloads/HBG-BTE-MSA-S&P-CTY-2020.03.28.xlsx', 'supplier_payment', null);
+  const sp = await ingestFile(SP, 'supplier_payment', null);
   ok(sp.ok > 100 && sp.errors === 0, `S&P chain committed (ok=${sp.ok})`);
 
   // 4. dashboard surfaces

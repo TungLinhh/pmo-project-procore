@@ -73,7 +73,7 @@ export async function validateDeptParent(db, tenantId, deptId, parentId) {
 }
 
 // Does this user satisfy the role required by a chain level?
-// ADMIN/CEO bypass (same rule as the permission matrix).
+// Admin bypasses the chain. CEO is eligible only for a CEO level.
 export function satisfiesLevel(user, requiredRole) {
   const role = getUserRole(user);
   if (FULL_ACCESS_ROLES.includes(role)) return true;

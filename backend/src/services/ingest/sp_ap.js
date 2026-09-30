@@ -7,7 +7,7 @@
 // zero so unpaid ≠ paid-by-mistake.
 import { getDb } from '../../db/index.js';
 import { recordFailure } from './failures.js';
-import { readSheet, toText, toFloat, toDate } from '../../lib/excel.js';
+import { readSheet, readWorkbook, toText, toFloat, toDate } from '../../lib/excel.js';
 import { norm } from '../../lib/classify.js';
 import { locateMaterialHeader } from './material_supply.js';
 
@@ -58,8 +58,7 @@ function parsePay(row, pay) {
 }
 
 export async function parse(filePath, projectId, zoneCode) {
-  const XLSX = (await import('xlsx')).default;
-  const wb = XLSX.readFile(filePath, { cellDates: true });
+  const wb = readWorkbook(filePath);
   const { code, name } = resolveZone(zoneCode);
   const sheets = [];
   let skippedEmpty = 0;
@@ -106,6 +105,14 @@ export async function parse(filePath, projectId, zoneCode) {
 
 export async function commit(parsed, projectId, zoneCode) {
   const db = getDb();
+  // Imports can mark a request PAID, which checkTransition() treats as
+  // APPROVED->PAID, so the approval trail has to name someone. The importer is
+  // the system acting on behalf of the uploader. CEO is role='pmo' + is_ceo=1,
+  // not a role value (see permissions.js).
+  const approvedBy = await db.prepare(
+    `SELECT u.id FROM users u WHERE u.tenant_id = (SELECT tenant_id FROM projects WHERE id = ?)
+       AND (u.role IN ('admin','accounting') OR u.is_ceo) ORDER BY u.id LIMIT 1`
+  ).getAsync(projectId);
   const report = { doc_type: 'supplier_payment', ok: 0, errors: 0, items: [], skipped_empty: parsed.skippedEmpty || 0 };
   for (const sheet of parsed.sheets) {
     for (const [idx, row] of sheet.rows.entries()) {
@@ -139,14 +146,57 @@ export async function commit(parsed, projectId, zoneCode) {
             pr = { id: Number(ins.lastInsertRowid), status: 'PENDING' };
           }
           if (b.payment?.paid_date) {
+            if (b.payment.value == null || b.payment.balance == null) {
+              throw new Error('paid_date present but contract value/balance is unknown; manual reconciliation required');
+            }
+            const value = Number(b.payment.value);
+            const balance = Number(b.payment.balance);
+            if (!Number.isFinite(value) || !Number.isFinite(balance)) {
+              throw new Error('paid_date present but contract value/balance is unknown; manual reconciliation required');
+            }
+            const paidAmount = value - balance;
+            if (paidAmount < 0 || paidAmount > value) {
+              throw new Error(`invalid paid amount ${paidAmount} for value ${value}`);
+            }
+            // `paid_amount` PHẢI bằng `amount` của payment request — đúng bất biến
+            // `routes/payment.js:381` cưỡng chế (`paid_amount must equal the approved
+            // request amount`). Trước đây ghi `amount = value, paid_amount = value`
+            // với `value` là **giá trị hợp đồng** trong sheet, khác `pr.amount` (tiền
+            // của đợt này) ⇒ mọi khoản nạp vào đều không đi qua nổi kiểm tra đó.
+            // Comment cũ mô tả ý định đúng nhưng code chưa làm theo.
+            const requestAmount = Number(pr.amount ?? 0);
+            if (!Number.isFinite(requestAmount) || requestAmount <= 0) {
+              throw new Error(`payment request ${prNo} has no usable amount; manual reconciliation required`);
+            }
             const existing = await db.prepare('SELECT id FROM payments WHERE payment_request_id = ?').getAsync(pr.id);
             if (!existing) {
-              const paidAmount = (b.payment.value ?? 0) - (b.payment.balance ?? 0);
               await db.prepare(
                 `INSERT INTO payments (project_id, payment_request_id, contract_no, invoice_no, amount, paid_amount, due_date, paid_at, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PAID', 'imported: supplier-AP')`
-              ).runAsync(projectId, pr.id, contractNo, invoiceNo, b.payment.value ?? null, paidAmount, b.payment.due_date || null, b.payment.paid_date);
+              ).runAsync(projectId, pr.id, contractNo, invoiceNo, requestAmount, requestAmount, b.payment.due_date || null, b.payment.paid_date);
             }
-            await db.prepare(`UPDATE payment_requests SET status = 'PAID' WHERE id = ? AND status <> 'PAID'`).runAsync(pr.id);
+            // PENDING -> PAID bỏ qua `checkTransition` và chốt "PR phải APPROVED mới
+            // chi được" của route, nên dòng PAID không có dấu vết duyệt. Ghi lại
+            // người duyệt trước khi đổi trạng thái.
+            //
+            // `status IN ('PENDING','APPROVED')` — trước đây là `status <> 'PAID'`,
+            // cho phép **PR đã bị từ chối** nhảy thẳng lên PAID, trái với ma trận
+            // chuyển trạng thái (`lib/transitions.js`: REJECTED chỉ về DRAFT/PENDING).
+            // PR ở trạng thái khác thì câu UPDATE không khớp dòng nào ⇒ `runAsync`
+            // trả `rowCount = 0`; đó là hành vi đúng, nhưng phải nói rõ thay vì im
+            // lặng. Nên ta kiểm `rowCount` và báo lỗi dòng nếu không chuyển được.
+            const flipped = await db.prepare(
+              `UPDATE payment_requests
+                  SET status = 'PAID',
+                      approved_by = COALESCE(approved_by, ?),
+                      approved_date = COALESCE(approved_date, CURRENT_DATE)
+                WHERE id = ? AND status IN ('PENDING', 'APPROVED')`
+            ).runAsync(approvedBy?.id ?? null, pr.id);
+            if (!flipped.rowCount) {
+              const current = await db.prepare('SELECT status FROM payment_requests WHERE id = ?').getAsync(pr.id);
+              throw new Error(
+                `payment request ${prNo} is ${current?.status || 'unknown'}; only PENDING or APPROVED can be imported as PAID`,
+              );
+            }
           }
           report.ok++;
         } catch (e) {
