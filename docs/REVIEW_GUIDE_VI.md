@@ -230,6 +230,25 @@ chứa `sha256.ext`. `s3Bucket()` **ném lỗi** nếu thiếu `S3_BUCKET` thay 
 **Điểm còn đỏ:** `UPLOADS_DIR` chưa nằm trên filesystem riêng (mục `uploads_volume`) —
 xem P3-5.
 
+### P1-8. Ba nhánh sản phẩm đã **chôn** không ai biết
+
+Đo 2026-09-30, khi dựng sổ S&P mẫu để chạy được hai bài `step1`: một nhánh nghiệp vụ chết
+âm thầm vì **không có dữ liệu nào chạm tới nó**, nên nó chưa bao giờ được kiểm.
+
+| Nhánh | Vì sao chôn | Đã sửa |
+|---|---|---|
+| Nạp bảng kê thanh toán **có dòng đã trả** | `sp_ap.commit()` đọc `flipped.rowCount` trong khi `db.prepare().runAsync()` trả `{ lastInsertRowid, changes }` ⇒ `!undefined` luôn đúng ⇒ **mọi** dòng đã trả đều ném lỗi | đọc `changes`. Đo: trước 45/45 dòng đỏ, sau 0/45 |
+| Dò cột khối thanh toán | `locatePaymentCols` quét cả **dòng dữ liệu**; ô chứa chữ `PAID` bị nhận nhầm là cột "ngày thanh toán thực tế" ⇒ mọi dòng mất ngày trả mà `errors` vẫn 0 | band chỉ gồm dòng tiêu đề |
+| Tạo dòng thanh toán | `pr.amount` lấy từ object in-memory vốn **không có trường đó** ⇒ `Number(undefined ?? 0)` = 0 | đọc từ DB |
+
+Cả ba đều là cùng một dạng: **đường dẫn không đổi kết quả nếu không ai đi qua**. Bài học
+cho tôi: khi một bài kiểm bị "bỏ qua vì thiếu dữ liệu", đó là lúc **phải tự dựng dữ liệu** —
+vì chính nó là thứ chỉ ra đường dẫn chết.
+
+**Cẩn thận khi đọc `rowCount`:** 6 chỗ khác trong `routes/` cũng viết `.rowCount` nhưng gọi
+`client.query()` thô, mà `pg` trả `rowCount` thật. Chỉ chỗ đi qua shim `db.prepare()` mới
+sai. Phân biệt bằng **kết quả lấy từ đâu**, không phải tên trường.
+
 ### P1-7. Hạn mức nhà cung cấp AI
 
 `lib/ai/providers.js:273` đọc `AI_MONTHLY_CAP_USD`. Nguyên tắc: **lỗi hạn mức phải là
@@ -408,10 +427,10 @@ readiness mức fail, tức dịch vụ không dậy nổi. Nó chỉ nên bật
 
 | Việc | Cần gì |
 |---|---|
-| `step1-05`, `step1-06` | **sổ S&P của khách hàng** — file có bảng kê vật tư *và* cột thanh toán **có số thật**. Đo: cả 14 file `Vật tư *.xlsx` trên máy đều có cột nhưng ô rỗng ⇒ `sp_ap.parse` ra `batches: 0`. Bỏ file vào `SP_FILE` là chạy ngay |
+| ~~`step1-05`, `step1-06`~~ **ĐÃ XONG 2026-09-30** | Chủ dự án chọn phương án C: `scripts/build-sp-ap-sample.mjs` sinh sổ S&P từ dữ liệu thật trong DB. Cả hai bài ALL PASS. Khi khách hàng đưa sổ thật vào, đặt `SP_FILE` và bộ chạy sẽ dùng file đó. **Số trong sổ sinh ra là số dự án demo — không dùng để đối soát giá trị** |
 | Container thật | Máy này không có Docker. Muốn thì phải cài runtime + `docker build`/`compose up`; hiện 4 bài "Docker" chỉ phủ phần tĩnh |
-| Tách `UPLOADS_DIR` | Một lệnh `sudo` (xem P3-5). Đây là **mục readiness đỏ duy nhất còn do giới hạn máy**; 3 mục kia cố ý giữ cho demo |
-| **435 file chưa commit** | Không phải kỹ thuật, nhưng là rủi ro lớn nhất còn lại: toàn bộ 9 đợt sửa nằm trong working tree, một `git checkout` là mất hết. Cần chốt ít nhất một checkpoint |
+| ~~Tách `UPLOADS_DIR`~~ | **ĐÃ ĐÓNG Ý CHẤP NHẬN 2026-09-30 — và không thể đóng trên máy này.** Đo `lsblk`/`findmnt`: WSL2 với **một** filesystem `/dev/sdd` ext4, **không có phân vùng nào**; `/dev/sdd5` trong hướng dẫn cũ **không tồn tại**. `uploads_volume` so `stat().dev` thư mục với thư mục cha ⇒ không thể xanh, kể cả khi là root. Muốn có thì phải phân vùng lại đĩa (thay image). Hệ quả: thay image WSL ⇒ `backend/uploads/` mất theo |
+| ~~435 file chưa commit~~ | **ĐÃ XONG** — chủ dự án cho phép commit: `f541191`, `247f9ba`, `45466f5` |
 | 16 mục quyết định | `docs/DATA_DECISIONS_REQUIRED.md`. Ưu tiên **mục 13** — lịch dự án demo nằm ở 2019-2020 trong khi "hôm nay" là 2026, nên `schedule-compress` và `deadline-replan` **luôn không khả thi** ⇒ chặn UAT nếu UAT cần demo nén lịch |
 
 ---
