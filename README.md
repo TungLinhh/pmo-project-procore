@@ -6,50 +6,102 @@
 
 ## 1. Cài đặt
 
-### Yêu cầu
-- Node.js 22+ · npm 10+
-- PostgreSQL 16+ (local) **hoặc** Docker
+**Yêu cầu:** Node.js 22+ · npm 10+ · PostgreSQL 16+ (kèm `psql`, `pg_isready` trong PATH).
 
-### Cách 1 — Docker Compose (khuyên dùng)
+### 1.1 Nhanh nhất — ba lệnh
 
 ```bash
-git clone <repo-url>
-cd pmo_project
-docker compose up --build
-# Mở http://localhost:3000 — Postgres chạy ở 5433, DB tự migrate + seed
-```
-
-### Cách 2 — Chạy native (dev)
-
-```bash
-# 1. Postgres ở 127.0.0.1:5433 (user/pass/db: pmo_user/pmo_dev_pwd/pmo)
-./backend/scripts/pg-ctl.sh start        # Linux/WSL — hoặc dùng Postgres sẵn có
-
-# 2. Cài + migrate + seed
+git clone <repo-url> && cd pmo_project
 npm install
-cd backend
-node src/db/init.js                    # đọc backend/.env; migrate + seed demo
-
-# 3. Chạy hai terminal
-# Terminal 1: giữ nguyên thư mục backend
-PORT=3000 LOGIN_RATE_MAX=1000 node src/index.js
-
-# Terminal 2: mở terminal mới, quay về thư mục gốc
-cd ..
-npm run dev:frontend
+npm run setup      # Postgres → vai trò+database → schema → dữ liệu demo
+npm run dev        # http://localhost:5173
 ```
 
-### Cách 3 — Production một cổng
+Đăng nhập: **`admin@hbg.com`** / **`admin123`** (bảng vai trò ở mục 2).
+
+`npm run setup` làm đúng bốn việc, **mỗi việc chạy lại được** (nên cài nửa vời rồi chạy lại vẫn an toàn):
+
+| Bước | Việc | Ghi chú |
+|---|---|---|
+| 1 | Bật Postgres ở `127.0.0.1:5433` | Tự gọi `pg-ctl.sh` (Linux/WSL). macOS/Windows: bật Postgres sẵn có rồi chạy lại |
+| 2 | Tạo vai trò `pmo_user` + database `pmo` | Cần Postgres superuser — xem [1.3](#13-khi-npm-run-setup-báo-lỗi) |
+| 3 | Chạy migration + seed danh mục | `backend/src/db/init.js`, idempotent |
+| 4 | Nạp dữ liệu dự án demo + neo lịch về ngày chạy | 864 hạng mục lịch · 200 shop drawing · 77 hợp đồng |
+
+Bước 4 **bắt buộc** để thấy dữ liệu: `init.js` chỉ seed tenant/user/vai trò/zone, còn hạng mục
+lịch, shop drawing, vật tư, hợp đồng, thanh toán nằm trong
+`backend/src/db/seed/demo/demo-project.sql`. Thiếu nó thì app vẫn chạy nhưng **mọi màn
+nghiệp vụ đều trống**.
+
+### 1.2 Chạy từng bước (khi cần soi lỗi)
 
 ```bash
-npm install
-npm run build                            # build frontend → frontend/dist/
-npm start                                # backend phục vụ dist/ ở :3000
+npm run setup:postgres   # hoặc: bash backend/scripts/db-bootstrap.sh
+node backend/src/db/init.js
+npm run demo:seed        # hoặc: node scripts/load-demo-seed.mjs
+npm run demo:dates       # neo lịch về hôm nay (tự bỏ qua nếu dữ liệu chưa cũ)
 ```
 
-### Deploy Coolify / VPS
+Sau đó chạy app ở hai cổng (backend `:3000`, Vite `:5173` — Vite tự proxy `/api`):
 
-Image build từ `Dockerfile` (multi-stage, `node:22-slim`). Chỉ cần biến môi trường:
+```bash
+npm run dev
+```
+
+Chạy production một cổng (backend phục vụ luôn giao diện tĩnh ở `:3000`):
+
+```bash
+npm install && npm run build && npm start
+```
+
+### 1.3 Khi `npm run setup` báo lỗi
+
+**`permission denied for schema public` hoặc `role "pmo_user" does not exist`**
+→ bước 2 chưa có vai trò/database. Chạy `npm run setup:postgres`. Script cần Postgres
+superuser; theo thứ tự thử:
+
+```bash
+# Linux/WSL — user hiện tại đã là superuser của cluster do pg-ctl.sh tạo
+npm run setup:postgres
+
+# Postgres hệ thống (Ubuntu/Debian)
+PGHOST_ADMIN=/var/run/postgresql PGUSER_ADMIN=postgres npm run setup:postgres
+
+# Docker
+docker compose up -d postgres && npm run setup:postgres
+
+# Homebrew (macOS) — Postgres chạy dưới user khác
+sudo -u <user-postgres> npm run setup:postgres
+```
+
+**`Postgres không chạy ở 127.0.0.1:5433`** → khởi động Postgres rồi chạy lại
+`npm run setup`. Muốn dùng cổng khác: `DB_PORT=5432 npm run setup`.
+
+**`relation "..." does not exist` khi nạp seed** → schema lệch. Chạy lại
+`node backend/src/db/init.js` rồi `npm run demo:seed`.
+
+**`EADDRINUSE :::3000`** → cổng 3000 đã bị chiếm (thường là service cũ còn chạy).
+`PORT=3100 npm run dev`.
+
+### 1.4 Dữ liệu demo trong repo
+
+`backend/src/db/seed/demo/demo-project.sql` (8228 dòng, ~770 KB) là **kết quả đã nạp**
+từ hồ sơ dự án BTE — mã hạng mục, số lượng, giá trị hợp đồng. Hồ sơ gốc
+(`reference_sheets/`) **không** commit vì là tài liệu khách hàng.
+
+- Sửa dữ liệu demo trong DB rồi cập nhật lại file: `npm run demo:export`
+- Muốn repo không kèm dữ liệu mẫu: xoá thư mục đó; app vẫn chạy, chỉ trống.
+- Cột `upload_id` xuất thành `NULL` vì file upload không có trong repo (giữ id sẽ tạo
+  nút tải file trả 404).
+
+### 1.5 Docker
+
+```bash
+git clone <repo-url> && cd pmo_project
+docker compose up --build     # http://localhost:3000 — Postgres ở 5433, tự migrate + seed
+```
+
+Image build từ `Dockerfile` (multi-stage, `node:22-slim`). Biến môi trường cho Coolify/VPS:
 
 ```bash
 DATABASE_URL=postgresql://user:pass@host:5432/pmo   # hoặc DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME
@@ -155,6 +207,7 @@ pmo_project/
 │   ├── governance/         # Approval, Audit, Cấu hình duyệt, Master data
 │   └── api/                # client (tự refresh JWT, FormData upload)
 ├── tests/e2e/              # các suite E2E dùng chung + cleanup-demo.mjs
+├── scripts/                # công cụ vận hành: setup, nạp/xuất seed, neo lịch demo
 ├── docs/                   # tài liệu kỹ thuật + SRS (xem dưới)
 ├── Dockerfile · docker-compose.yml · docker-entrypoint.sh · .env.example
 ```
@@ -165,10 +218,14 @@ pmo_project/
 
 ```bash
 npm test                    # 4 suites CI: api, payment-sla, shop-approval, schema
-node tests/e2e/pipeline-guard.mjs   # full pipeline trên DB scratch (không chạm dev)
-node tests/e2e/demo-walkthrough.mjs # 28 checks luồng demo trên dữ liệu thật
+npm run test:all            # + browser + schema audit
+npm run test:release        # release gate (75 mục)
+node scripts/run-all-e2e.mjs # TOÀN BỘ 141 bài e2e — tự bật server riêng ở :3000
 node tests/e2e/cleanup-demo.mjs     # dọn rác test khỏi DB dev
 ```
+
+`run-all-e2e.mjs` tự bật/tắt server, nên **dừng service đang giữ cổng 3000 trước**. Nếu đặt
+`BASE_URL` thì bộ chạy không tự bật server và dùng luôn `LOGIN_RATE_MAX` của máy.
 
 Backend dev chạy ở `:3000`, Postgres `127.0.0.1:5433`. Mỗi suite tự dọn rác nó tạo; `cleanup-demo.mjs` dọn phần còn sót.
 

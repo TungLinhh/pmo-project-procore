@@ -9,6 +9,11 @@
     "frontend"
   ],
   "scripts": {
+    "setup": "node scripts/setup-demo.mjs",
+    "setup:postgres": "bash backend/scripts/db-bootstrap.sh",
+    "demo:seed": "node scripts/load-demo-seed.mjs",
+    "demo:export": "node scripts/export-demo-seed.mjs",
+    "demo:dates": "node scripts/rebase-demo-dates.mjs",
     "dev": "concurrently \"npm:dev:backend\" \"npm:dev:frontend\"",
     "dev:backend": "npm run dev --workspace=backend",
     "dev:frontend": "npm run dev --workspace=frontend",

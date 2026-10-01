@@ -192,13 +192,17 @@ if (allowDemoAccounts) {
       { code: 'RES-4BR', name_en: 'Resort 4BR' },
       { code: 'VNR', name_en: 'Vietnam Residences' },
     ];
+    let added = 0;
     for (const z of zones) {
       const exists = await db.prepare('SELECT id FROM zones WHERE project_id = ? AND code = ?').getAsync(bteProject.id, z.code);
       if (!exists) {
         await db.prepare('INSERT INTO zones (project_id, code, name_en) VALUES (?, ?, ?)').runAsync(bteProject.id, z.code, z.name_en);
+        added++;
       }
     }
-    console.log(`✓ Seeded ${zones.length} zones for BTE project`);
+    // Báo **số thật**, không phải `zones.length`: chạy lại trên DB đã có zone thì `added = 0`,
+    // mà in "Seeded 19 zones" là thông báo nói dối (loại lỗi tệ nhất: không hỏng, chỉ gây tin sai).
+    console.log(`✓ Zones BTE: ${added}/${zones.length} mới`);
 
     // Demo tenant only: give each seeded persona explicit access to the demo
     // project. Production and new projects still require explicit membership.
