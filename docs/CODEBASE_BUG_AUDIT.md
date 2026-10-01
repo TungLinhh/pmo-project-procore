@@ -2356,6 +2356,76 @@ và **không được sửa**. Nên **nạp lại từ hồ sơ gốc sẽ đưa
 Đây là đánh đổi đã chọn; bài kiểm chỉ canh phần DB và giờ kiểm tra riêng rằng bài kiểm
 không để lại dự án tạm.
 
+### 11.32 Đợt 22 (tiếp) — `reconcile-values` là bài kiểm **phụ thuộc thứ tự**
+
+Sau khi bỏ qua "20 dòng mất" với lý do "dữ liệu demo", tôi chạy lại: nó **xanh** khi chạy
+riêng. Vậy đó là bài kiểm phụ thuộc trạng thái còn sót của bài khác — và điều đó tệ hơn lỗi
+dữ liệu, vì nó đỏ *ngẫu nhiên theo thứ tự*.
+
+#### Tái hiện, thay vì đoán
+
+Viết quét chạy lần lượt **141 bài đứng trước `reconcile-values`**, chụp số dòng dự án
+demo sau mỗi bài:
+
+```
+baseline schedule/shop/material = 864/200/203
+(141 bài chạy xong, không bài nào đổi số dòng)
+cuối: 864/200/203
+→ chạy reconcile ngay sau đó: FAIL — 20 mất   ← tái hiện đúng, hai con số giống hệt
+```
+
+Số dòng nghiệp vụ **không đổi**, nên thứ đổi không phải dữ liệu mà là **phạm vi truy vấn**.
+
+#### Nguyên nhân
+
+`reconcile-pilot-data.mjs`:
+
+```js
+const scopeUploadId = uploadId || (await findUploadId(db, row.file, projectId));
+```
+
+`uploadId` chỉ có khi `--apply`, nhưng `|| findUploadId(...)` vẫn tra theo **hash nội
+dung**. Tìm thấy thì truy vấn đối chiếu thu hẹp còn `upload_id = <id>`:
+
+```sql
+SELECT * FROM <bảng> WHERE project_id = $1 AND ($2::int IS NULL OR upload_id = $2)
+```
+
+Đo trên dự án demo: `construction_schedule_items` có **816/864** dòng `upload_id = NULL`,
+chỉ **48** dòng có `upload_id`. Nên khoá theo upload **loại 816 dòng đang tồn tại** khỏi
+phép so ⇒ 20 dòng nguồn của `TĐ KID.xlsx` bị coi là "mất".
+
+Và vì `findUploadId` tra `file_uploads` — bảng mà **11 bài kiểm** sửa (`bim-intake`,
+`bim-viewer`, `regression-wave5`, `step1-06`, `file-access`, `daily-wizard-configure`,
+`upload-tenant-scope`, `p1-generic-rows`, `cleanup-demo`, `p5-golden`…) — nên **hash có
+khớp hay không** phụ thuộc bài nào chạy trước. Đó chính là cơ chế biến một bài xanh thành
+đỏ mà không có thay đổi dữ liệu nào.
+
+#### Sửa: phạm vi upload chỉ dùng khi nó **đại diện trọn vẹn**
+
+Nếu bảng có dòng `upload_id IS NULL` thì so toàn dự án và **ghi lại** việc đã bỏ phạm vi.
+Sau khi sửa, báo cáo in ra:
+
+```
+43 file: project (file chưa từng được nạp — so toàn dự án)
+ 1 file: project — bỏ phạm vi upload <id>: 816/864 dòng không gắn upload,
+         khoá theo upload sẽ coi nhầm chúng là "mất"
+```
+
+ALL PASS, và **lý do** nằm ngay trong báo cáo chứ không phải trong đầu tôi.
+
+#### Bài học rộng hơn
+
+Một bài kiểm mà **kết quả phụ thuộc bài khác** đã chạy trước là bài kiểm không cô lập. Quy
+tắc của repo vốn là "bài kiểm mới phải tự dọn dòng của mình" — nhưng đây là **chiều ngược**:
+bài này không tạo gì, mà lại **nhạy** với rác của bài khác. Nên thêm: khi một bài xanh lúc
+chạy riêng và đỏ trong bộ, nghi ngờ đầu tiên là **phạm vi truy vấn theo trạng thái còn sót**,
+chứ không phải dữ liệu.
+
+Và phép thử rẻ nhất để phân biệt: chạy lần lượt các bài đứng trước rồi chạy bài cần kiểm,
+đồng thời chụp một thứ **không phải số dòng** (ở đây là `upload_id` và phạm vi) — vì
+số dòng ổn định không có nghĩa dữ liệu ổn định.
+
 ### 12.1 Đã xác minh bằng đọc mã, CHƯA sửa — nên sửa trước khi lên máy thật
 
 > ℹ️ Bảng này **đã cũ một phần**: 5 mục từng nằm đây đã được sửa ở đợt 14 và kiểm lại

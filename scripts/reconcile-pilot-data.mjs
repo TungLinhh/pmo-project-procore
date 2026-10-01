@@ -288,11 +288,41 @@ for (const row of files) {
         entry.db_rows = Number(count?.c || 0);
       }
       // Values, not just row counts: this is the check SRS 9.1 asks for.
-      const scopeUploadId = uploadId || (await findUploadId(db, row.file, projectId));
+        // **Khoá theo upload chỉ đúng khi MỌI dòng của bảng thuộc upload đó.** Đo
+        // 2026-09-30 trên dự án demo: `construction_schedule_items` có **816/864** dòng
+        // `upload_id = NULL` và chỉ 48 dòng có `upload_id`. Nên khi `findUploadId` tìm
+        // thấy hash thì phạm vi **thu hẹp còn 48 dòng**, và 20 dòng nguồn bị coi là
+        // "mất" trong khi chúng **vẫn còn** trong dự án — chỉ là không gắn upload.
+        //
+        // Hệ quả còn tệ hơn: kết quả **phụ thuộc bài kiểm nào chạy trước**, vì
+        // `file_uploads` bị 11 bài kiểm sửa. Đo: `reconcile-values` **xanh** khi chạy
+        // riêng, **đỏ** sau khi 141 bài khác chạy trước, với **đúng hai con số giống
+        // hệt**. Đó là bài kiểm phụ thuộc thứ tự, không phải dữ liệu hỏng.
+        //
+        // Nên: chỉ dùng phạm vi upload khi nó **đại diện trọn vẹn**; nếu bảng có dòng
+        // không gắn upload thì so toàn dự án và **ghi lại** việc đã bỏ phạm vi.
+        const candidate = uploadId || (await findUploadId(db, row.file, projectId));
+        const scopeTable = { construction: 'construction_schedule_items', shop: 'shop_drawings', material: 'materials' }[row.type];
+        let scopeUploadId = candidate;
+        let scopeNote = candidate ? 'upload' : 'project (file chưa từng được nạp — so toàn dự án)';
+        if (candidate && scopeTable) {
+          const link = await db.prepare(
+            `SELECT count(*) FILTER (WHERE upload_id = $2) AS in_scope,
+                    count(*) FILTER (WHERE upload_id IS NULL) AS unlinked,
+                    count(*) AS total
+               FROM ${scopeTable} WHERE project_id = $1`
+          ).getAsync(projectId, candidate).catch(() => null);
+          if (link && Number(link.unlinked) > 0) {
+            scopeUploadId = null;
+            scopeNote = `project — bỏ phạm vi upload ${candidate}: `
+              + `${link.unlinked}/${link.total} dòng không gắn upload, `
+              + 'khoá theo upload sẽ coi nhầm chúng là "mất"';
+          }
+        }
       const values = await reconcileValues(db, row.type, projectId, parsed, scopeUploadId);
       entry.value_reconciliation = {
         scoped_to_upload: scopeUploadId,
-        scope: scopeUploadId ? 'upload' : 'project (file chưa từng được nạp — so toàn dự án)',
+          scope: scopeNote,
         fields_compared: values.compared,
         rows_matched: values.matched,
         rows_missing_in_db: values.missing_in_db,
