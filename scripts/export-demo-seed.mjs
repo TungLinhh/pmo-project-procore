@@ -173,7 +173,45 @@ async function copyOut(table, where, colList, projectId) {
   return psqlCopy(`COPY (SELECT ${colList} FROM ${table} WHERE ${where.replace(/\$1/g, String(id))})`);
 }
 
+/**
+ * Che tên công ty **thật** trước khi ghi ra file.
+ *
+ * Lý do: repo này **public** (đo 2026-10-01: `GET /TungLinhh/pmo-project-procore` → 200
+ * không cần đăng nhập), mà `contract_name` của 2/77 hợp đồng chứa tên nhà thầu thật kèm
+ * số hợp đồng thật (`Công ty TNHH LAN THANH | HĐ: HB03 – BTE/2019/HĐKT HB-LT …`).
+ * Đó là thông tin đối tác của khách hàng đang dự án, không thuộc phần cần công khai.
+ *
+ * Vì sao ở đây chứ không sửa tay file seed: `npm run demo:export` xoá và ghi lại file
+ * (xem đầu hàm), nên mọi sửa đổi đặt trực tiếp vào `.sql` sẽ **mất** khi ai đó export lại.
+ * Quy tắc phải nằm trong script.
+ *
+ * Chỉ che **tên pháp lý của công ty**; giá trị hợp đồng và mã hạng mục giữ nguyên vì đó là
+ * dữ liệu nghiệp vụ cần cho demo có sức thật.
+ */
+const VENDOR_ALIASES = [
+  ['Công ty TNHH LAN THANH', 'Công ty CP Xây dựng Minh Long'],
+  ['Công ty TNHH Thạnh Đức', 'Công ty TNHH Đại Phát'],
+];
+
 const outFile = join(OUT, 'demo-project.sql');
+const redact = (text) => {
+  let out = text;
+  let hits = 0;
+  for (const [real, alias] of VENDOR_ALIASES) {
+    const parts = out.split(real);
+    hits += parts.length - 1;
+    out = parts.join(alias);
+  }
+  return { out, hits };
+};
+
+let masked = 0;
+for (let i = 0; i < parts.length; i++) {
+  const r = redact(parts[i]);
+  parts[i] = r.out;
+  masked += r.hits;
+}
+
 writeFileSync(outFile, `-- Dữ liệu dự án demo (${PROJECT}) — sinh tự động, đừng sửa tay.
 -- ${totalRows} dòng. Nạp: node scripts/load-demo-seed.mjs
 -- Dữ liệu dẫn xuất từ hồ sơ dự án BTE; xem cảnh báo trong scripts/export-demo-seed.mjs.
@@ -195,4 +233,5 @@ COMMIT;
 
 const { statSync } = await import('node:fs');
 console.log(`\nĐã ghi ${relative(ROOT, outFile)} — ${totalRows} dòng, ${Math.round(statSync(outFile).size / 1024)} KB`);
+console.log(`  ${masked ? `✓ đã che ${masked} tên công ty thật (repo public)` : '· không có tên công ty thật cần che'}`);
 console.log('  Nạp bằng: node scripts/load-demo-seed.mjs');

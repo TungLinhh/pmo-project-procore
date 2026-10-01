@@ -1,10 +1,22 @@
 # PMO — Hệ thống quản lý dự án thi công
 
-> Quản lý tiến độ, shop drawing, vật tư, thanh toán và nhân lực cho các dự án xây dựng nhiều khu vực (zones). Ingest trực tiếp từ file Excel công trường → dashboard 4 trụ cột theo thời gian thực.
+> Quản lý tiến độ, bản vẽ thi công, vật tư, thanh toán và nhân lực cho các dự án xây dựng nhiều khu vực (zones). Nhập trực tiếp từ file Excel công trường → bảng điều khiển 4 trụ cột theo thời gian thực.
+
+**[📖 Hướng dẫn cài và dùng](docs/GUIDE_VI.md)** — bốn lệnh, không cần biết lập trình.
+
+```bash
+git clone https://github.com/TungLinhh/pmo-project-procore.git && cd pmo-project-procore
+npm install && npm run setup
+npm run dev     # http://localhost:5173 — đăng nhập admin@hbg.com / admin123
+```
+
+> **Dữ liệu mẫu:** `npm run setup` nạp sẵn một dự án mẫu (864 hạng mục lịch, 200 hồ sơ bản vẽ,
+> 77 hợp đồng) và **tự chỉnh ngày về hôm nay** nên luôn thấy dự án đang chạy. Tên công ty
+> trong dữ liệu mẫu đã được che — hồ sơ gốc của khách hàng không nằm trong repo này.
 
 ---
 
-## 1. Cài đặt
+## 1. Cài đặt (chi tiết kỹ thuật)
 
 **Yêu cầu:** Node.js 22+ · npm 10+ · PostgreSQL 16+ (kèm `psql`, `pg_isready` trong PATH).
 
